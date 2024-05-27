@@ -145,49 +145,60 @@ class Rule34API {
 
         String paramString = mapToPairedString(params);
         Uri requestURL = Uri.parse("${_siteUrl}index.php?$paramString");
+        Uri otherURL = Uri.parse("${_siteUrl}index.php?page=history&type=page_notes&id=$postID");
+
+        _client.options.headers["cookies"] = mapToPairedString(cookies, separator: ';');        
         
-        _client.options.headers["cookies"] = mapToPairedString(cookies, separator: ';');
-        Response<String> content = await _client.get(requestURL.toString());
-        Response<String> otherData = await _client.get(Uri.parse("${_siteUrl}index.php?page=history&type=page_notes&id=$postID").toString());
+        try {
+            _client.options.headers["User-Agent"] = userAgent;
+            Response<String> content = await _client.get(requestURL.toString());
+            Response<String> otherData = await _client.get(otherURL.toString());
+            _client.options.headers.remove("User-Agent");
+
+            Document document = parse(content.data!);
+            Document otherDoc = parse(otherData.data!);
+
+            Element? noteContainer = document.getElementById("note-container");
+
+            if (noteContainer == null) return [];
             
-        Document document = parse(content.data!);
-        Document otherDoc = parse(otherData.data!);
+            for (var i = 0; i < noteContainer.children.length; i += 2) {
+                Element noteBox = noteContainer.children[i];
+                //Element noteBody = noteContainer.children[i + 1];
 
-        Element? noteContainer = document.getElementById("note-container");
+                var splitStyle = pairedStringToMap(noteBox.attributes["style"] as String, separator: "; ", unifier: ": ");
 
-        if (noteContainer == null) return [];
-        
-        for (var i = 0; i < noteContainer.children.length; i += 2) {
-            Element noteBox = noteContainer.children[i];
-            //Element noteBody = noteContainer.children[i + 1];
-
-            var splitStyle = pairedStringToMap(noteBox.attributes["style"] as String, separator: "; ", unifier: ": ");
-
-            Map<String, dynamic> currentNote = {
-                "x": int.parse(splitStyle["left"]?.replaceAll("px", "") as String),
-                "y": int.parse(splitStyle["top"]?.replaceAll("px", "") as String),
-                "width": int.parse(splitStyle["width"]?.replaceAll("px", "") as String),
-                "height": int.parse(splitStyle["height"]?.replaceAll("px", "") as String),
-                "post_id": postID
-            };
-            
-            rawNotes.add(currentNote);
-        }
-
-        var antigraph = "¶";
-        Element tcontent = otherDoc.querySelector("tbody") as Element;
-        for (var note in rawNotes.indexed) {        
-            try {
-                int index = (note.$1 + 1).clamp(tcontent.children.length - 1, tcontent.children.length - 1);
-                List<Element> tableData = tcontent.children[index].children;
-                note.$2["id"] = int.parse(tableData[2].children[0].text.trim());
-                note.$2["body"] = tableData[3].innerHtml.trim().replaceAll(antigraph, "\n");
-                note.$2["created_at"] = _dateFormat.parse(tableData[5].text);
-            } on Exception {
-                continue;
+                Map<String, dynamic> currentNote = {
+                    "x": int.parse(splitStyle["left"]?.replaceAll("px", "") as String),
+                    "y": int.parse(splitStyle["top"]?.replaceAll("px", "") as String),
+                    "width": int.parse(splitStyle["width"]?.replaceAll("px", "") as String),
+                    "height": int.parse(splitStyle["height"]?.replaceAll("px", "") as String),
+                    "post_id": postID
+                };
+                
+                rawNotes.add(currentNote);
             }
-            
-        }
+
+            var antigraph = "¶";
+            Element tcontent = otherDoc.querySelector("tbody") as Element;
+            for (var note in rawNotes.indexed) {        
+                try {
+                    int index = (note.$1 + 1).clamp(tcontent.children.length - 1, tcontent.children.length - 1);
+                    List<Element> tableData = tcontent.children[index].children;
+                    note.$2["id"] = int.parse(tableData[2].children[0].text.trim());
+                    note.$2["body"] = tableData[3].innerHtml.trim().replaceAll(antigraph, "\n");
+                    note.$2["created_at"] = _dateFormat.parse(tableData[5].text);
+                } catch(e) {
+                    Nokulog.logger.e(e);
+                    continue;
+                }
+                
+            }
+        } catch (e) {
+            Nokulog.logger.e(requestURL);
+            Nokulog.logger.e(otherURL);
+            Nokulog.logger.e(e);
+        } 
 
         return rawNotes;
     }
