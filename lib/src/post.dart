@@ -93,7 +93,7 @@ class Post {
     Post? _parent;
     List<Post> _children = [];
 
-    Post({required int postID, 
+    Post({required dynamic postID, 
           required List<String> tags, 
           required List<String> sources, 
           required List<String> images, 
@@ -110,6 +110,10 @@ class Post {
         
         addSmartRetry(_client);
         addSmartRetry(_fallbackClient);
+
+        if (postID is! String && postID is! int) {
+            throw ArgumentError.value(postID, "postID", "postID must be either an int or a String UUID");
+        }
 
         postData["post_id"] = postID;
         postData["tags"] = tags;
@@ -344,7 +348,9 @@ class Post {
         return toJsonString();
     }
 
-    int get postID => postData["post_id"];
+    dynamic get postID => postData["post_id"];
+
+    String get postUID => postData["post_id"];
     
     List<String> get tags => postData["tags"];
     
@@ -376,7 +382,7 @@ class Post {
     
     List<String> get filenames => postData["filenames"];
     
-    String get identifier => "${source}_$postID";
+    String get identifier => "${source}_${postData["post_id"]}";
     
     bool get fetchedData => _fetched;
 

@@ -3,7 +3,7 @@
 import "dart:math";
 
 import "subfinder.dart";
-import "../Utils/nhentai_api.dart";
+import "../Utils/mangadex_api.dart";
 import "../post.dart";
 import "../comment.dart";
 import "../note.dart";
@@ -17,25 +17,21 @@ List<Map<String, dynamic>> _filterInvalidComments(List<Map<String, dynamic>> com
     return comments.where((element) => element.containsKey("body") && !element["is_deleted"]).toList();
 }*/
 
-class NHentaiFinder implements ISubfinder {
+class MangadexFinder implements ISubfinder {
     static Post toPost(Map<String, dynamic> postData) {
-        if (postData["id"] is String) {
-            postData["id"] = int.parse(postData["id"]);
-        }
-
         return Post(
-            postID: postData["id"], 
-            tags: List<String>.from(postData["tags"]), 
-            sources: ["https://nhentai.net/g/${postData['id']}"], 
+            postID: postData["post_id"],
+            tags: postData["tags"], 
+            sources: List<String>.from(postData["sources"]), 
             images: List<String>.from(postData["images"]), 
             authors: List<String>.from(postData["authors"]), //(postData["tag_string_artist"] as String).split(" "), 
-            source: "nhentai", 
-            preview: postData["preview_url"], 
+            source: "mangadex", 
+            preview: postData["preview"], 
             md5: [], 
-            rating: Rating.explicit, 
-            parentID: null,
-            dimensions: postData["dimensions"], 
-            poster: postData["poster"] ?? "Unknown",
+            rating: postData["rating"], 
+            parentID: postData["parent_id"], 
+            dimensions: List<List<int>>.from(postData["dimensions"]), 
+            poster: postData["owner"],
             posterID: null, 
             title: postData["title"]
         );
@@ -48,38 +44,43 @@ class NHentaiFinder implements ISubfinder {
             creatorID: commentData["creator_id"],
             creator: commentData["creator"] ?? "User ${commentData['creator_id']}",
             body: commentData["body"], 
-            source: "nhentai",
+            source: "rule34",
             createdAt: commentData["created_at"] as DateTime
         );
     }
 
     static Note toNote(Map<String, dynamic> noteData) {
-        throw Exception("NHentai has no notes.");
+        return Note(
+            noteID: noteData["id"], 
+            createdAt: noteData["created_at"], 
+            x: noteData["x"], 
+            y: noteData["y"], 
+            width: noteData["width"], 
+            height: noteData["height"], 
+            body: noteData["body"], 
+            source: "rule34", 
+            postID: noteData["post_id"]
+        );
     }
 
-    late NHentaiAPI _client;
-
-    NHentaiFinder(String cfClearance) {
-        _client = NHentaiAPI(cfClearance);
-    }
-
+    final MangadexAPI _client;
     final _config = SubfinderConfiguration();
 
+    MangadexFinder() : _client = MangadexAPI();
+
     @override
-    Future<List<Post>> searchPosts(String tags, {int limit = 25, int? page}) async {
-        page = (page == null) ? 1 : page;
-        page = (page <= 0) ? 1 : page;
+    Future<List<Post>> searchPosts(String tags, {int limit = 100, int? page}) async {
+        page = (page == null) ? 0 : page - 1;
+        page = (page < 0) ? 0 : page;
 
         return await _getAllPosts(tags, limit: limit, page: page);
     }
 
     @override
     Future<Post?> getPost(dynamic postID) async {
-        if (postID is! int) {
-            throw ArgumentError.value(postID, "postID", "postID should be an int");
+        if (postID is! String) {
+            throw ArgumentError.value(postID, "postID", "postID should be a string UUID");
         }
-
-        if (postID <= 0) return null;
 
         var rawPost = await _client.getPost(postID);
 
@@ -90,20 +91,18 @@ class NHentaiFinder implements ISubfinder {
     Future<List<Comment>> searchComments({int? postID, int limit = 100, int? page}) async {
         page = (page == null) ? 0 : page;
 
-        var rawComments = await _client.searchComments(postID: postID, limit: limit, page: page);
+        return [];
+
+        /*var rawComments = await _client.searchComments(postID: postID, limit: limit, page: page);
 
         //rawComments = _filterInvalidComments(rawComments);
 
-        return [for (var rawComment in rawComments) toComment(rawComment)];
+        return [for (var rawComment in rawComments) toComment(rawComment)];*/
     }
 
     @override
     Future<Comment?> getComment(int commentID, {int? postID}) async {
-        if (postID == null) return null;
-
-        var rawComment = await _client.getComment(commentID, postID);
-
-        return (rawComment != null) ? toComment(rawComment) : null;
+        return null;
     }
 
     @override
@@ -113,25 +112,35 @@ class NHentaiFinder implements ISubfinder {
 
     @override
     Future<Post?> postGetParent(Post post) async {
-        return null;
+        if (post.parentID == null) {
+            return null;
+        }
+
+        return post.setParent(await getPost(post.parentID as int));
     }
 
     @override
     Future<List<Post>> postGetChildren(Post post) async {
-        return [];
+        var rawChildren = await _client.postGetChildren(post.postUID);
+
+        if (rawChildren.isEmpty) return [];
+
+        List<Post> children = [for (var child in rawChildren) toPost(child)];
+        
+        return post.setChildren(children);
     }
 
-    Future<List<Post>> _getAllPosts(String tags, {int limit = 25, int? page}) async {
+    Future<List<Post>> _getAllPosts(String tags, {int limit = 100, int? page}) async {
         page = (page == null) ? 0 : page;
 
         List<Post> currentPosts = [];
-        int defaultSize = 25;
+        int defaultSize = 100;
         int checkSize = min(defaultSize, limit);
         int currentSize = checkSize;
         int currentPage = page;
 
         while (currentSize == checkSize) {
-            var rawPosts = await _client.searchPosts(tags, limit: limit, page: currentPage);
+            var rawPosts = await _client.searchPosts(tags, limit: checkSize, page: currentPage);
 
             currentSize = rawPosts.length;
 

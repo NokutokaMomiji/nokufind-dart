@@ -77,7 +77,11 @@ class DanbooruFinder implements ISubfinder {
     }
 
     @override
-    Future<Post?> getPost(int postID) async {
+    Future<Post?> getPost(dynamic postID) async {
+        if (postID is! int) {
+            throw ArgumentError.value(postID, "postID", "postID should be an int");
+        }
+
         if (postID <= 0) return null;
 
         var rawPost = await _client.getPost(postID);

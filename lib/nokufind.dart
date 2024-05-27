@@ -15,5 +15,6 @@ export 'src/Subfinder/konachan_finder.dart';
 export 'src/Subfinder/yandere_finder.dart';
 export 'src/Subfinder/gelbooru_finder.dart';
 export 'src/Subfinder/nhentai_finder.dart';
+export 'src/Subfinder/mangadex_finder.dart';
 
 export 'src/Utils/download_stream.dart';

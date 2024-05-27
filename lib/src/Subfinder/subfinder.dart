@@ -92,7 +92,7 @@ abstract interface class ISubfinder {
     final _config = SubfinderConfiguration();
 
     Future<List<Post>> searchPosts(String tags, {int limit = 100, int? page});
-    Future<Post?> getPost(int postID);
+    Future<Post?> getPost(dynamic postID);
 
     Future<List<Comment>> searchComments({int? postID, int limit = 100, int? page});
     Future<Comment?> getComment(int commentID, {int? postID});
