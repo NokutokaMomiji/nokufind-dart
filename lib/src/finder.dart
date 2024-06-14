@@ -148,10 +148,15 @@ class Finder {
 
         var items = await _executor!.join(withWaiting: true);
         for (var item in items) {
+            if (item == null) {
+                Nokulog.logger.e("One of the subfinders returned a null item. This should never happen.");
+                continue;
+            }
+
             allPosts.addAll(item as List<Post>);
         }
 
-        _executor!.close();
+        await _executor!.close();
 
         return allPosts;
     }

@@ -41,14 +41,31 @@ class ListLog extends LogOutput {
 class Nokulog {
     static List<String> log = [];
 
+    static LogFilter _filter = ErrorFilter();
+    static LogPrinter? _printer = PrettyPrinter();
+
     static Logger logger = Logger(
         filter: ErrorFilter(),
         printer: PrettyPrinter(),
         output: ListLog()
     );
 
-    static void changeLogger() {
-        
+    static set logErrors(bool value) {
+        Nokulog._filter = (value) ? ErrorFilter() : DevelopmentFilter();
+        logger = Logger(
+            filter: Nokulog._filter,
+            printer: Nokulog._printer,
+            output: ListLog()
+        );
+    }
+
+    static set logPretty(bool value) {
+        Nokulog._printer = (value) ? PrettyPrinter() : null;
+        logger = Logger(
+            filter: Nokulog._filter,
+            printer: Nokulog._printer,
+            output: ListLog()
+        );
     }
 }
 
