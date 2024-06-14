@@ -11,6 +11,7 @@ enum DownloadStatus {
     downloadStart,
     downloadEnd,
     downloadFailed,
+    cancelled
 }
 
 /// Class that contains the current [DownloadStatus] of a post, as well as relevant data such as the [Post] 
@@ -39,6 +40,8 @@ class DownloadData {
 /// 
 /// You can also use [cancel] to cancel the fetching.
 class DownloadStream {
+    static const String _defaultTitle = "Download Stream";
+
     final StreamController<DownloadData> _controller = StreamController<DownloadData>();
     final Executor _executor = Executor(concurrency: 15);
     late List<Post> _postList;
@@ -46,7 +49,8 @@ class DownloadStream {
 
     late Stream<DownloadData> _stream;
     int _completed = 0;
-    String title = "Download Stream";
+    String _title = _defaultTitle;
+    bool _hasCancelled = false;
 
     DownloadStream(postList) {
         _postList = List<Post>.from(postList);
@@ -64,11 +68,17 @@ class DownloadStream {
         for (Post post in _postList) {
             // We save the download task future to be able to add the onError callback as well as make it cancellable.
             Future downloadTask = _executor.scheduleTask(() async {
+                DownloadStream instance = this;
+
+                if (instance._hasCancelled) return;
+
                 // We indicate that the download has started.
                 _controller.sink.add(DownloadData(post, DownloadStatus.downloadStart));
                 
                 // This fetches all the data from the post and stores it internally.
                 Future fetchFuture = post.fetchData();
+
+                if (instance._hasCancelled) return;
 
                 // Once the post fetch process has finished, we want to indicate that it finished downloading.
                 fetchFuture.then(
@@ -106,11 +116,20 @@ class DownloadStream {
     }
 
     Future<void> cancel() async {
+        _controller.sink.add(DownloadData(null, DownloadStatus.cancelled));
+
+        _hasCancelled = true;
+
         for (var task in _tasks) {
             task.cancel();
         }
 
         await _executor.close();
+    }
+
+    String get title => _title;
+    set title(String value) {
+        _title = (value.isEmpty) ? _defaultTitle : value;
     }
 
     int get completed => _completed;
