@@ -33,12 +33,18 @@ class Post {
 
     static Post importPost(String filePath) {
         String fileContent = File(filePath).readAsStringSync();
-        var jsonData = jsonDecode(fileContent);
+        Map<String, dynamic> jsonData = jsonDecode(fileContent);
 
         for (var i = 0; i < jsonData["dimensions"].length; i++) {
             jsonData["dimensions"][i] = List<int>.from(jsonData["dimensions"][i]);
         }
         
+        Map<String, String> headers = {};
+
+        if (jsonData.containsKey("headers")) {
+            headers = Map<String, String>.from(jsonData["headers"]);
+        }
+
         return Post(
             postID: jsonData["post_id"],
             tags: List<String>.from(jsonData["tags"]),
@@ -54,7 +60,7 @@ class Post {
             poster: jsonData["poster"],
             posterID: jsonData["poster_id"],
             title: jsonData["name"]
-        );
+        )..setHeaders(headers);
     }
 
     static Post importPostFromMap(Map<String, dynamic> jsonData) {
@@ -62,6 +68,11 @@ class Post {
             jsonData["dimensions"][i] = List<int>.from(jsonData["dimensions"][i]);
         }
         
+        Map<String, String> headers = {};
+        if (jsonData.containsKey("headers")) {
+            headers = Map<String, String>.from(headers);
+        }
+
         return Post(
             postID: jsonData["post_id"],
             tags: List<String>.from(jsonData["tags"]),
@@ -77,7 +88,7 @@ class Post {
             poster: jsonData["poster"],
             posterID: jsonData["poster_id"],
             title: jsonData["name"]
-        );
+        )..setHeaders(headers);
     }
 
     Map<String, dynamic> postData = {};
@@ -135,7 +146,7 @@ class Post {
     Future<String> exportPost(String path, {bool withImages = false}) async {
         await Directory(path).create(recursive: true);
     
-        String filePath = "$path/$identifier";
+        String filePath = "$path/$identifier.json";
 
         await File(filePath).writeAsString(toJsonString());
 
@@ -251,7 +262,10 @@ class Post {
     }
 
     String toJsonString() {
-        return jsonEncode(postData, toEncodable: (obj) {
+        var data = Map<String, dynamic>.from(postData);
+        data["headers"] = headers;
+
+        return jsonEncode(data, toEncodable: (obj) {
             if (obj is Rating) return obj.index;
             return obj;
         });
@@ -260,6 +274,7 @@ class Post {
     Map<String, dynamic> toJson() {
     	var data = Map<String, dynamic>.from(postData);
         if (data["rating"] is Rating) data["rating"] = (data["rating"] as Rating).index;
+        data["headers"] = headers;
         return data;
     }
 
