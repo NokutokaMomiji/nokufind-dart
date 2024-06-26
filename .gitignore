@@ -23,5 +23,7 @@ doc/api/
 *.js.deps
 *.js.map
 
+test/*
+
 .flutter-plugins
 .flutter-plugins-dependencies

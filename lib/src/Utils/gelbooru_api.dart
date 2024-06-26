@@ -11,7 +11,7 @@ import "../Utils/utils.dart";
 class GelbooruAPI {
     static const String _url = "https://gelbooru.com/";
 
-    final Dio _client = Dio()..httpClientAdapter = Http2Adapter(ConnectionManager(idleTimeout: Duration(seconds: 15)));
+    final Dio _client = Dio()..httpClientAdapter = Http2Adapter(ConnectionManager(idleTimeout: const Duration(seconds: 15)));
     final _dateFormat = DateFormat("yyyy-MM-dd HH:mm:ss");
     final _noteDateFormat = DateFormat("EEE MMM d HH:mm:ss -yyyy yyyy");
     final _profileExpr = RegExp(r"(?<=url\(')(.*?)(?='\))");
@@ -67,7 +67,12 @@ class GelbooruAPI {
         };
 
         try {
-            return ((await _makeRequest("index.php", params: params) as Map<String, dynamic>)["post"] as List).first;
+            var response = await _makeRequest("index.php", params: params);
+            Map<String, dynamic> data = response as Map<String, dynamic>;
+
+            if (!data.containsKey("post")) return null;
+
+            return data["post"].first;
         } on DioException {
             return null;
         }

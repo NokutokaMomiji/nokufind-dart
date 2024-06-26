@@ -51,6 +51,7 @@ class DownloadStream {
     int _completed = 0;
     String _title = _defaultTitle;
     bool _hasCancelled = false;
+    FutureOr<void> Function()? onFinished;
 
     DownloadStream(postList) {
         _postList = List<Post>.from(postList);
@@ -60,9 +61,11 @@ class DownloadStream {
         _stream = _controller.stream.asBroadcastStream();
     }
     
-    Future<void> start(FutureOr<void> onFetched(Post post)?) async {
+    Future<void> start(FutureOr<void> Function(Post post)? onFetched, {FutureOr<void> Function()? onFinished}) async {
         // We indicate that the process has started.
         _controller.sink.add(DownloadData(null, DownloadStatus.started));
+
+        this.onFinished = onFinished;
 
         // We iterate through each post and fetch the data.
         for (Post post in _postList) {
@@ -113,6 +116,11 @@ class DownloadStream {
 
         // After everything, the process is done, so we indicate that we have finished.
         _controller.sink.add(DownloadData(null, DownloadStatus.finished));
+        
+        var finishedFunc = this.onFinished;
+        if (finishedFunc != null) {
+            finishedFunc();
+        }
     }
 
     Future<void> cancel() async {
@@ -125,6 +133,11 @@ class DownloadStream {
         }
 
         await _executor.close();
+
+        var finishedFunc = onFinished;
+        if (finishedFunc != null) {
+            finishedFunc();
+        }
     }
 
     String get title => _title;

@@ -21,10 +21,10 @@ class Rule34Finder implements ISubfinder {
     static Post toPost(Map<String, dynamic> postData) {
         return Post(
             postID: postData["id"], 
-            tags: (postData["tags"] as String).split(" "), 
-            sources: (postData["source"] as String).split(" "), 
+            tags: List<String>.from(postData["tags"]), 
+            sources: List<String>.from(postData["sources"]), 
             images: [postData["file_url"]], 
-            authors: [], //(postData["tag_string_artist"] as String).split(" "), 
+            authors: List<String>.from(postData["authors"]), //(postData["tag_string_artist"] as String).split(" "), 
             source: "rule34", 
             preview: postData["preview_url"], 
             md5: [postData["hash"]], 

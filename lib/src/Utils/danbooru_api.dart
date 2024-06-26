@@ -7,7 +7,7 @@ import "../Utils/utils.dart";
 class DanbooruAPI {
     static const String _url = "https://danbooru.donmai.us/";
     
-    final Dio _client = Dio()..httpClientAdapter = Http2Adapter(ConnectionManager(idleTimeout: Duration(seconds: 15)));
+    final Dio _client = Dio()..httpClientAdapter = Http2Adapter(ConnectionManager(idleTimeout: const Duration(seconds: 15)));
 
     DanbooruAPI() {
         addSmartRetry(_client);
@@ -31,8 +31,8 @@ class DanbooruAPI {
             }
 
             return List<Map<String, dynamic>>.from(results);
-        } on DioException catch (e) {
-            Nokulog.logger.e(e);
+        } catch (e, stackTrace) {
+            Nokulog.logger.e("Failed to find posts matching \"$tags\"", error: e, stackTrace: stackTrace);
             return [];
         }
     }
@@ -40,8 +40,8 @@ class DanbooruAPI {
     Future<Map<String, dynamic>?> getPost(int postID) async {
         try {
             return await _makeRequest("posts/$postID.json") as Map<String, dynamic>;
-        } on DioException catch (e) {
-            Nokulog.logger.e(e);
+        } catch (e, stackTrace) {
+            Nokulog.logger.e("Failed to fetch post $postID.", error: e, stackTrace: stackTrace);
             return null;
         }
     }
@@ -67,8 +67,8 @@ class DanbooruAPI {
 
             return List<Map<String, dynamic>>.from(results);
             
-        } on DioException catch (e) {
-            Nokulog.logger.e(e);
+        } catch (e, stackTrace) {
+            Nokulog.logger.e("Failed to fetch comments.", error: e, stackTrace: stackTrace);
             return [];
         }
     }
@@ -80,8 +80,8 @@ class DanbooruAPI {
         
         try {
             return await _makeRequest("comments/$commentID.json") as Map<String, dynamic>;
-        } on DioException catch (e) {
-            Nokulog.logger.e(e);
+        } catch (e, stackTrace) {
+            Nokulog.logger.e("Failed to fetch comment with ID $commentID.", error: e, stackTrace: stackTrace);
             return null;
         }
     }
@@ -99,8 +99,8 @@ class DanbooruAPI {
             }
 
             return List<Map<String, dynamic>>.from(results);
-        } on DioException catch (e) {
-            Nokulog.logger.e(e);
+        } catch (e, stackTrace) {
+            Nokulog.logger.e("Failed to fetch notes for post $postID.", error: e, stackTrace: stackTrace);
             return [];
         }
     }
@@ -116,6 +116,8 @@ class DanbooruAPI {
 
         if (response.data == null) {
             throw DioException(
+                stackTrace: StackTrace.current,
+                type: DioExceptionType.badResponse,
                 requestOptions: response.requestOptions,
                 response: response,
                 message: "Response data was null"

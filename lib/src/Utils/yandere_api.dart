@@ -10,7 +10,7 @@ import "../Utils/utils.dart";
 class YandereAPI {
     static const String _url = "https://yande.re/";
 
-    final Dio _client = Dio()..httpClientAdapter = Http2Adapter(ConnectionManager(idleTimeout: Duration(seconds: 15)));
+    final Dio _client = Dio()..httpClientAdapter = Http2Adapter(ConnectionManager(idleTimeout: const Duration(seconds: 15)));
     final _dateFormat = DateFormat("EEE MMM dd HH:mm:ss yyyy");
 
     YandereAPI() {

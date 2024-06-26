@@ -16,5 +16,7 @@ export 'src/Subfinder/yandere_finder.dart';
 export 'src/Subfinder/gelbooru_finder.dart';
 export 'src/Subfinder/nhentai_finder.dart';
 export 'src/Subfinder/hitomi_finder.dart';
+export 'src/Subfinder/nozomi_finder.dart';
+export 'src/Subfinder/pixiv_finder.dart';
 
 export 'src/Utils/download_stream.dart';

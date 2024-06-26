@@ -19,24 +19,41 @@ import 'Utils/utils.dart';
 class NoSuchSubfinderException implements Exception {
     String cause;
     NoSuchSubfinderException(this.cause);
+
+    @override
+    String toString() => cause;
+}
+
+class DisabledSubfinderException implements Exception {
+    String cause;
+    DisabledSubfinderException(this.cause);
+
+    @override
+    String toString() => cause;
 }
 
 class Finder {
     final Map<String, ISubfinder> _clients = {};
-    final SubfinderConfiguration _config = SubfinderConfiguration();
+    late final SubfinderConfiguration _config;
     Executor? _executor;
     
     Finder() {
+        _config = SubfinderConfiguration(callback: _onConfigChange);
         _config.setProperty("aliases", {});
-        _config.setProperties = true;
+        _config.setProperty("enabled", {});
+        _config.setProperty("use_lower_quality", false);
+        _config.lockProperties();
     }
 
     void addSubfinder(String name, ISubfinder subfinder) {
         _clients[name] = subfinder;
         _config.getConfig("aliases")[name] = {};
+        _config.getConfig("enabled")[name] = true;
     }
 
     void removeSubfinder(String name) {
+        (_config.getConfig("aliases") as Map).remove(name);
+        (_config.getConfig("enabled") as Map).remove(name);
         _clients.remove(name);
     }
 
@@ -83,7 +100,7 @@ class Finder {
     void removeTagAlias(String tag, String client) {
         _checkSubfinderExists(client);
 
-        var aliases = configuration.getConfig("aliases") as Map;
+        var aliases = configuration.getConfig<Map>("aliases")!;
 
         if (!aliases.containsKey(client)) {
             aliases[client] = <String, String>{};
@@ -92,13 +109,33 @@ class Finder {
         Nokulog.logger.d(aliases[client].remove(tag));
     }
 
-    Future<List<Post>> searchPosts(String tags, {int limit = 100, int? page, String? client}) async {
-        await cancelSearch();
+    bool subfinderIsEnabled(String client) {
+        _checkSubfinderExists(client);
+
+        return _config.getConfig<Map>("enabled")![client];
+    }
+
+    bool subfinderSetEnabled(String client, bool enabled) {
+        _checkSubfinderExists(client);
+
+        return _config.getConfig<Map>("enabled")![client] = enabled;
+    }
+
+    Future<List<Post>> searchPosts(String tags, {int limit = 100, int? page, String? client, bool cancelPreviousSearch = false}) async {
+        if (cancelPreviousSearch) {
+            await cancelSearch();
+        }
 
         var aliases = configuration.getConfig("aliases") as Map;
 
         if (client != null) {
             _checkSubfinderExists(client);
+
+            final bool isEnabled = _config.getConfig<Map>("enabled")![client]!;
+
+            if (!isEnabled) {
+                throw DisabledSubfinderException("Subfinder \"$client\" was selected but is disabled.");
+            }
 
             var clientAliases = Map<String, String>.from(aliases[client]);
             String resultTags = tags;
@@ -116,47 +153,49 @@ class Finder {
             return posts;
         }
 
-        _executor = Executor();
+        _executor = _executor ?? Executor(concurrency: 15, rate: Rate.perSecond(10));
         List<Post> allPosts = [];
 
         for (var client in _clients.entries) {
-            _executor!.scheduleTask(() async {
-                var clientName = client.key;
-                var clientSubfinder = client.value;
-                var clientAliases = aliases[clientName] as Map;
+            try {
+                final bool isEnabled = _config.getConfig<Map>("enabled")![client.key]!;
 
-                var resultTags = tags;
-
-                clientAliases.forEach((key, value) {
-                    resultTags = resultTags.replaceAll(key, value);
-                });
-
-                try {
-                    var posts = await clientSubfinder.searchPosts(resultTags, limit: limit, page: page);
-                    
-                    if (posts.isEmpty) {
-                        Nokulog.logger.w("[nokufind.Finder] $clientName returned no posts.");
-                    }
-                    
-                    return posts;
-                } on Exception catch (e) {
-                    Nokulog.logger.e("[nokufind.Finder]: ($clientName) $e");
-                    return List<Post>.empty();
+                if (!isEnabled) {
+                    Nokulog.logger.d("Subfinder \"${client.key}\" is disabled. Skipping.");
+                    continue;
                 }
-            });
-        }
+                
+                _executor!.scheduleTask(() async {
+                    var clientName = client.key;
+                    var clientSubfinder = client.value;
+                    var clientAliases = aliases[clientName] as Map;
 
-        var items = await _executor!.join(withWaiting: true);
-        for (var item in items) {
-            if (item == null) {
-                Nokulog.logger.e("One of the subfinders returned a null item. This should never happen.");
-                continue;
+                    var resultTags = tags;
+
+                    clientAliases.forEach((key, value) {
+                        resultTags = resultTags.replaceAll(key, value);
+                    });
+
+                    try {
+                        var posts = await clientSubfinder.searchPosts(resultTags, limit: limit, page: page);
+                        
+                        if (posts.isEmpty) {
+                            Nokulog.logger.w("[nokufind.Finder] $clientName returned no posts.");
+                        }
+                        
+                        allPosts.addAll(posts);
+                        return;
+                    } on Exception catch (e, stackTrace) {
+                        Nokulog.logger.e("[nokufind.Finder]: ($clientName) $e", error: e, stackTrace: stackTrace);
+                        return;
+                    }
+                });
+            } catch (e, stackTrace) {
+                Nokulog.logger.e("[nokufind.Finder]: An error occurred when attempting to schedule a task.", error: e, stackTrace: stackTrace);
             }
-
-            allPosts.addAll(item as List<Post>);
         }
 
-        await _executor!.close();
+        await _executor!.join(withWaiting: true);
 
         return allPosts;
     }
@@ -267,10 +306,13 @@ class Finder {
     }
 
     Future<List<String?>> downloadFast(List<Post> posts, String path) async {
-        Executor executor = Executor(concurrency: 15);
+        Executor executor = Executor(concurrency: 10);
         List<String?> savePaths = [];
 
-        for (var post in posts) {
+        final List<Post> randomizedPosts = List<Post>.from(posts);
+        randomizedPosts.shuffle();
+
+        for (var post in randomizedPosts) {
             executor.scheduleTask(() async {
                 try {
                     savePaths.addAll(await post.downloadAll(path));
@@ -313,11 +355,11 @@ class Finder {
         }
     }
 
-    DownloadStream fetchDataStream(List<Post> posts, {FutureOr<void> onFetched(Post post)?}) {
+    DownloadStream fetchDataStream(List<Post> posts, {FutureOr<void> Function(Post post)? onFetched, FutureOr<void> Function()? onFinished}) {
         var obj = DownloadStream(posts);
 
         if (onFetched != null) {
-            obj.start(onFetched);
+            obj.start(onFetched, onFinished: onFinished);
         }
 
         return obj;
@@ -350,7 +392,11 @@ class Finder {
                 continue;
             }
 
-            subfinder.configuration.setConfig(key, value);
+            try {
+                subfinder.configuration.setConfig(key, value);
+            } catch (e) {
+                continue;
+            }
         }
     }
 
@@ -362,5 +408,6 @@ class Finder {
 
     SubfinderConfiguration get configuration => _config;
     List<String> get clientNames => _clients.keys.toList();
+    List<String> get enabledClients => _clients.keys.where((client) => subfinderIsEnabled(client)).toList();
 }
 

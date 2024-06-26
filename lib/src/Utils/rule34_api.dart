@@ -2,6 +2,7 @@ import "dart:convert";
 
 import "package:dio/dio.dart";
 import "package:dio_http2_adapter/dio_http2_adapter.dart";
+import "package:executor/executor.dart";
 import "package:html/dom.dart";
 import "package:html/parser.dart";
 import "package:intl/intl.dart";
@@ -13,7 +14,7 @@ class Rule34API {
     static const String _url = "https://api.rule34.xxx/";
     static const String _siteUrl = "https://rule34.xxx/";
 
-    final Dio _client = Dio()..httpClientAdapter = Http2Adapter(ConnectionManager(idleTimeout: Duration(seconds: 15)));
+    final Dio _client = Dio()..httpClientAdapter = Http2Adapter(ConnectionManager(idleTimeout: const Duration(seconds: 15)));
     final _dateFormat = DateFormat("yyyy-MM-dd HH:mm:ss");
 
     Rule34API() {
@@ -37,14 +38,30 @@ class Rule34API {
         try {
             List<dynamic> results = await _makeRequest("index.php", params: params) as List<dynamic>;
             
+            if (results.isEmpty) return const [];
+
+            Executor executor = Executor(concurrency: 30);
+
             for (int i = 0; i < results.length; i++) {
                 results[i] = Map<String, dynamic>.from(results[i]);
+
+                executor.scheduleTask(() async {
+                    var tags = (results[i]["tags"] as String).split(" ");
+                    var source = (results[i]["source"] as String);
+                    var sources = (source.isNotEmpty) ? source.split(" ") : <String>[]; 
+
+                    results[i]["tags"] = tags;
+                    results[i]["sources"] = sources;
+                    results[i]["authors"] = (source.isNotEmpty) ? getPotentialAuthors(tags, sources) : <String>[];
+                });
             }
 
+            await executor.join(withWaiting: true);
+
             return List<Map<String, dynamic>>.from(results);
-        } catch (e) {
-            Nokulog.logger.e(e);
-            return <Map<String, dynamic>>[];
+        } catch (e, stackTrace) {
+            Nokulog.logger.e("Failed to search posts matching tags \"$tags\"", error: e, stackTrace: stackTrace);
+            return const <Map<String, dynamic>>[];
         }
     }
 
@@ -62,11 +79,21 @@ class Rule34API {
             
             for (int i = 0; i < results.length;) {
                 results[i] = Map<String, dynamic>.from(results[i]);
+
+                var tags = (results[i]["tags"] as String).split(" ");
+                var source = (results[i]["source"] as String);
+                var sources = (source.isNotEmpty) ? source.split(" ") : <String>[];
+
+                results[i]["tags"] = tags;
+                results[i]["sources"] = sources;
+                results[i]["authors"] = (source.isNotEmpty) ? getPotentialAuthors(tags, sources) : <String>[];
+
                 return results[i];
             }
 
             return null;
-        } on DioException {
+        } catch (e, stackTrace) {
+            Nokulog.logger.e("Failed to fetch post $postID.", error: e, stackTrace: stackTrace);
             return null;
         }
     }
@@ -206,13 +233,13 @@ class Rule34API {
     Future<dynamic> _makeRequest(String file, {Map<String, String>? params}) async {
         String paramString = (params != null) ? mapToPairedString(params) : "";
         Uri requestURL = Uri.parse("$_url$file?$paramString");
-
-        Nokulog.logger.d(requestURL);
         
         Response<String> response = await _client.get(requestURL.toString());
         
         if (response.data == null) {
             throw DioException(
+                stackTrace: StackTrace.current,
+                type: DioExceptionType.badResponse,
                 requestOptions: response.requestOptions,
                 response: response,
                 message: "Response data was null"

@@ -19,18 +19,28 @@ List<Map<String, dynamic>> _filterInvalidComments(List<Map<String, dynamic>> com
 
 class YandereFinder implements ISubfinder {
     static Post toPost(Map<String, dynamic> postData) {
+        int width = postData["width"];
+        int height = postData["height"];
+        String imageURL = postData["file_url"];
+
+        if (postData.containsKey("use_lower_quality")) {
+            width = postData["jpeg_width"];
+            height = postData["jpeg_height"];
+            imageURL = postData["jpeg_url"];
+        }
+
         return Post(
             postID: postData["id"], 
             tags: (postData["tags"] as String).split(" "), 
             sources: (postData["source"] as String).split(" "), 
-            images: [postData["file_url"]], 
+            images: [imageURL], 
             authors: [], //(postData["tag_string_artist"] as String).split(" "), 
             source: "yande.re", 
             preview: postData["preview_url"], 
             md5: [postData["md5"]], 
             rating: postData["rating"], 
             parentID: postData["parent_id"], 
-            dimensions: [[postData["width"], postData["height"]]], 
+            dimensions: [[width, height]], 
             poster: postData["author"] ?? "User ${postData['creator_id']}",
             posterID: postData["creator_id"], 
             title: null
@@ -64,10 +74,12 @@ class YandereFinder implements ISubfinder {
         );
     }
 
-    final YandereAPI _client;
+    final YandereAPI _client = YandereAPI();
     final _config = SubfinderConfiguration();
 
-    YandereFinder() : _client = YandereAPI();
+    YandereFinder() {
+        _config.setProperty("use_lower_quality", false);
+    }
 
     @override
     Future<List<Post>> searchPosts(String tags, {int limit = 100, int? page}) async {
@@ -81,6 +93,10 @@ class YandereFinder implements ISubfinder {
         if (postID <= 0) return null;
 
         var rawPost = await _client.getPost(postID);
+
+        if (_config.getConfig<bool>("use_lower_quality", defaultValue: false) == true) {
+            rawPost?["use_lower_quality"] = true;
+        }
 
         return (rawPost != null) ? toPost(rawPost) : null;
     }
@@ -137,13 +153,19 @@ class YandereFinder implements ISubfinder {
         int currentSize = checkSize;
         int currentPage = page;
 
+        bool useLowerQuality = (_config.getConfig<bool>("use_lower_quality", defaultValue: false) == true);
+
         while (currentSize == checkSize) {
             var rawPosts = await _client.searchPosts(tags, limit: checkSize, page: currentPage);
 
             currentSize = rawPosts.length;
 
             //rawPosts = _filterInvalidPosts(rawPosts);
-            currentPosts.addAll(rawPosts.map(toPost));
+            currentPosts.addAll(rawPosts.map((post) {
+                if (useLowerQuality) post["use_lower_quality"] = true;
+                
+                return toPost(post);
+            }));
 
             if (currentPosts.length >= limit) {
                 break;

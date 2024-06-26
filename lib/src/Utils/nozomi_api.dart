@@ -4,24 +4,52 @@ import "dart:typed_data";
 import "package:dio/dio.dart";
 import "package:dio_http2_adapter/dio_http2_adapter.dart";
 import "package:executor/executor.dart";
-import "package:nokufind/src/Utils/hitomi_utils.dart";
 
 import "../Utils/utils.dart";
 
-class HitomiAPI {
-    static const String _url = "https://ltn.hitomi.la/";
-    static const String _galleryUrl = "https://ltn.hitomi.la/galleries/";
-    static const List<String> _validTagTypes = ["character", "series", "artist", "group"];
+String thumbnailFromImageUrl(String imageUrl, String originalFormat) {
+    String newDomain = imageUrl.replaceAll("w.nozomi.la", "tn.nozomi.la");
+    String ext = imageUrl.split(".").last;
+    return newDomain.replaceAll(ext, "$originalFormat.webp");
+}
 
-    final Dio _client = Dio()..httpClientAdapter = Http2Adapter(ConnectionManager(idleTimeout: const Duration(seconds: 15)));
-    static Common? _common;
+String fullPathFromHash(String hash) {
+    if (hash.length < 3) {
+        return hash;
+    }
+    
+    // Use RegExp to match the pattern
+    RegExp regExp = RegExp(r'^.*(..)(.)$');
+    RegExpMatch? match = regExp.firstMatch(hash);
 
-    HitomiAPI() {
-        addSmartRetry(_client);
-        configureCommon();
+    if (match != null) {
+        String part2 = match.group(2)!;
+        String part1 = match.group(1)!;
+        return '$part2/$part1/$hash';
     }
 
-    Future<List<Map<String, dynamic>>> searchPosts(String tags, {int limit = 100, int page = 0}) async {
+    // If no match is found, return the original hash (this should not happen with the given pattern)
+    return hash;
+}
+
+class NozomiAPI {
+    static const String _url = "https://j.nozomi.la/";
+    static const String _imageUrl = "https://w.nozomi.la/";
+    static const String _indexUrl = "https://n.nozomi.la/index.nozomi";
+
+    final Dio _client = Dio()..httpClientAdapter = Http2Adapter(ConnectionManager(idleTimeout: const Duration(seconds: 15)));
+
+    NozomiAPI() {
+        addSmartRetry(_client);
+    }
+
+    static String fullUrlFromPathFromHash(String hash, bool isVideo) {
+        String hashString = fullPathFromHash(hash);
+        String ext = (isVideo) ? ".webm" : ".webp";
+        return "$_imageUrl$hashString$ext";
+    }
+
+    Future<List<Map<String, dynamic>>> searchPosts(String tags, {int limit = 100, int page = 1}) async {
         // Neither the page index nor the limit of posts can be smaller or equal to 0.
         // We cap them to sensible values.
         if (page <= 0) page = 1;
@@ -32,41 +60,15 @@ class HitomiAPI {
 
         // We iterate through all the tags to generate the request file path for later.
         for (String tag in splitTags) {
-            String actualTag = tag.replaceAll("_", " ");
-
-            if (tag.startsWith("female") || tag.startsWith("male")){
-                tagList.add("tag/$actualTag-all.nozomi");
-                continue;
-            }
-
-            if (tag.startsWith("language")) {
-                String language = tag.split(":").last;
-
-                tagList.add("index-$language.nozomi");
-                continue;
-            }
-
-            List<String> splitTag = actualTag.split(":");
-            String tagType = splitTag.first;
-            String tagValue = splitTag.last;
-
-            if (_validTagTypes.contains(tagType)) {
-                tagList.add("$tagType/$tagValue-all.nozomi");
-                continue;
-            }
-
-            tagList.add("tag/female:$actualTag-all.nozomi");
-            tagList.add("tag/male:$actualTag-all.nozomi");
-            tagList.add("tag/$actualTag-all.nozomi");
+            tagList.add("${_url}nozomi/$tag.nozomi");
         }
 
         // If the tag list is empty, we grab posts from the main index instead and we limit the post range.
         if (tagList.isEmpty) {
-            tagList.add("index-all.nozomi");
+            tagList.add(_indexUrl);
         }
 
         Nokulog.logger.d(tagList);
-
 
         var oldHeaders = Map<String, dynamic>.from(_client.options.headers);        
         _client.options.responseType = ResponseType.bytes;
@@ -95,8 +97,8 @@ class HitomiAPI {
             
             tagExecutor.scheduleTask(() async {
                 try {
-                    Nokulog.logger.d("Requesting $_url$tag");
-                    Response<Uint8List> response = await _client.get("$_url$tag");
+                    Nokulog.logger.d("Requesting $tag");
+                    Response<Uint8List> response = await _client.get(tag);
 
                     Nokulog.logger.d("Response: ${response.statusCode}");
                     Uint8List? data = response.data;
@@ -130,6 +132,8 @@ class HitomiAPI {
             results.values.first.toSet(), 
             (a, b) => a.intersection(b.toSet())
         );
+
+        if (intersectionPosts.isEmpty) return [];
 
         List<int> filteredPosts = intersectionPosts.toList();
         
@@ -175,96 +179,86 @@ class HitomiAPI {
         Map<String, dynamic> jsonData = {};
 
         try {
-            _client.options.responseType = ResponseType.plain;
+            String postPath = fullPathFromHash(postID.toString());
+            Response<String> postRequest = await _client.get("${_url}post/$postPath.json");
+            String? responseData = postRequest.data;
 
-            Response<String> response = await _client.get("$_galleryUrl$postID.js");
-            String? rawData = response.data;
-            
-            if (rawData == null || !rawData.contains("var galleryinfo = ")) {
-                Nokulog.logger.e("Either rawData is null or it doesn't contain valid info.");
-                return null;
-            }
+            if (responseData == null) return jsonData;
 
-            jsonData = jsonDecode(rawData.replaceAll("var galleryinfo = ", ""));
-            List<HitomiFile> files = (jsonData["files"] as List<dynamic>).map((element) => HitomiFile.fromJson(postID, Map<String, dynamic>.from(element))).toList();
+            jsonData = jsonDecode(responseData);
 
-            //Nokulog.logger.d(jsonEncode(jsonData));
-            //Nokulog.logger.d("======================================");
-
-            String? videoUrl = jsonData["video"];
-
-            if (_common == null) {
-                await configureCommon();
-            }
-
+            // Get images
+            List<dynamic> imageUrls = List.from(jsonData["imageurls"]);
             List<String> images = [];
-            List<String> hashes = [];
             List<List<int>> dimensions = [];
+            List<String> hashes = [];
 
-            Nokulog.logger.d("Iterating through files");
-            for (var file in files) {
-                images.add(_common!.urlFromUrlFromHash(postID.toString(), file, "webp", "", "a"));
-                hashes.add(file.hash);
-                dimensions.add([file.width, file.height]);
+            for (var image in imageUrls) {
+                // Thanks to Dart's type checker, we need to create a new map from the original to have it properly type-casted.
+                var imageData = Map<String, dynamic>.from(image);
+
+                // Theoretically, is_video should always be a string, but I already have too many bad memories of hitomi.
+                String isVideo = (imageData["is_video"] is! String) ? imageData["is_video"].toString() : imageData["is_video"];
+                images.add(fullUrlFromPathFromHash(imageData["dataid"], isVideo.isNotEmpty));
+
+                // Same thing with the dimensions of the image.
+                int width = imageData["width"];
+                int height = imageData["height"];
+
+                dimensions.add([width, height]);
+
+                hashes.add(imageData["dataid"]);
             }
 
-            List<String> tags = [
-                if (jsonData["language"] != null) "language:${jsonData["language"]}"
-            ];
+            String thumbnail = thumbnailFromImageUrl(images.first, jsonData["type"].toString());
 
-            Nokulog.logger.d("Iterating through tags.");
-            for (var tag in (jsonData["tags"] as List)) {
-                var currentTag = Map<String, dynamic>.from(tag);
-                
-                String? male = (currentTag["male"] is int) ? currentTag["male"].toString() : currentTag["male"];
-                String? female = (currentTag["female"] is int) ? currentTag["female"].toString() : currentTag["female"];
-
-                String gender = "tag:";
-                
-                if (male != null || female != null) {
-                    gender = (male != null && male.isEmpty) ? "female:" : "male:";
-                }
-                
-                tags.add("$gender${currentTag['tag']!.replaceAll(' ', '_')}");
-            }
-
-            List<dynamic>? artists = jsonData["artists"];
-            List<dynamic>? characters = jsonData["characters"];
-            List<dynamic>? parodies = jsonData["parodys"];
-            
+            List<String> tags = [];
             List<String> artistNames = [];
-            if (artists != null) {
-                Nokulog.logger.d("Iterating through artists.");
+
+            if (jsonData["general"] != null) {
+                List<dynamic> tagData = List.from(jsonData["general"]);
+                for (var tagItem in tagData) {
+                    var tag = Map<String, dynamic>.from(tagItem);
+
+                    tags.add(tag["tag"]!);
+                }
+            }
+
+            if (jsonData["artist"] != null) {
+                List<dynamic> artists = List.from(jsonData["artist"]);
+
                 for (var artist in artists) {
-                    tags.add("artist:${artist["artist"].replaceAll(" ", "_")}");
-                    artistNames.add(artist["artist"].replaceAll(" ", "_"));
+                    var artistData = Map<String, dynamic>.from(artist);
+
+                    tags.add(artistData["tag"]!);
+                    artistNames.add(artistData["tag"]!);
                 }
             }
 
-            if (characters != null) {
-                Nokulog.logger.d("Iterating through characters.");
-                for (var character in characters) {
-                    tags.add("character:${character["character"].replaceAll(" ", "_")}");
-                }
+            List<dynamic> remaining = [];
+
+            if (jsonData["copyright"] != null) {
+                remaining.addAll(List.from(jsonData["copyright"]));
             }
 
-            if (parodies != null) {
-                Nokulog.logger.d("Iterating through parodies.");
-                for (var parody in parodies) {
-                    tags.add("series:${parody["parody"].replaceAll(" ", "_")}");
-                }
+            if (jsonData["character"] != null) {
+                remaining.addAll(List.from(jsonData["character"]));
             }
 
-            Nokulog.logger.d("Constructing result.");
+            for (var item in remaining) {
+                var itemData = Map<String, dynamic>.from(item);
+                tags.add(itemData["tag"]!);
+            }
+
             Map<String, dynamic> result = {
                 "postID": (jsonData.containsKey("id") && jsonData["id"] != null) ? ((jsonData["id"] is String) ? int.tryParse(jsonData["id"]) : jsonData["id"]) : postID,
                 "title": jsonData["title"],
-                "images": (videoUrl == null) ? images : ["https:$videoUrl"],
+                "images": images,
                 "tags": tags,
                 "dimensions": dimensions,
                 "hashes": hashes,
                 "artists": artistNames,
-                "preview": _common!.getThumbnail(postID.toString(), files.first)
+                "preview": thumbnail
             };
 
             return result;
@@ -287,22 +281,5 @@ class HitomiAPI {
 
     Future<List<Map<String, dynamic>>> getNotes(int postID) async {
         return const [];
-    }
-
-    Future<void> configureCommon() async {
-        for (int i = 0; i < 10; i++) {
-            try {
-                Response<String> ggreq = await _client.get(
-                    "https://ltn.hitomi.la/gg.js",
-                    options: Options(
-                        responseType: ResponseType.plain
-                    )
-                );
-                _common = Common(ggreq.data!);
-                return;
-            } catch (e, stackTrace) {
-                Nokulog.logger.e("Failed to fetch gg.js.", error: e, stackTrace: stackTrace);
-            }
-        }
     }
 }

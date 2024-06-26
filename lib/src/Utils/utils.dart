@@ -119,7 +119,7 @@ List<String> parseTags(String tags) {
     return tagList;
 }
 
-dynamic get(List list, int index, {dynamic defaultValue}) {
+T? get<T>(List<T?> list, int index, {T? defaultValue}) {
     if (index >= list.length) {
         return defaultValue;
     }
@@ -178,12 +178,76 @@ void addSmartRetry(Dio dio) {
             logPrint: Nokulog.logger.e,
             retries: 5,
             retryDelays: [
-                Duration(seconds: 1),
-                Duration(seconds: 2),
-                Duration(seconds: 2),
-                Duration(seconds: 3),
-                Duration(seconds: 5),
+                const Duration(seconds: 1),
+                const Duration(seconds: 2),
+                const Duration(seconds: 2),
+                const Duration(seconds: 3),
+                const Duration(seconds: 5),
             ]
         )
     );
+}
+
+List<String> splitIntoPieces(String string) {
+    string = string.toLowerCase().replaceAll(')', '').replaceAll('https://', '').replaceAll('//', '/').replaceAll('_', '');
+
+    final List<String> parts = [];
+    String current = "";
+
+    for (int i = 0; i < string.length; i++) {
+        var char = string[i];
+
+        if (char == '(' || char == '/') {
+            if (current.isEmpty) continue;
+
+            if (current.startsWith("@")) {
+                parts.insert(0, current.substring(1, current.length));
+                current = "";
+                continue;
+            }
+
+            parts.add(current);
+            current = "";
+            continue;
+        }
+
+        current += char;
+    }
+
+    if (current.isNotEmpty) {
+        parts.add(current);
+    }
+
+    return parts;
+}
+
+String? checkForPotentialAuthor(String tag, String url) {
+    final List<String> tagParts = splitIntoPieces(tag);
+    final List<String> urlParts = splitIntoPieces(url);
+
+    for (var tagPart in tagParts) {
+        for (var urlPart in urlParts) {
+            if (tagPart == urlPart) return tagPart;
+        }
+    }
+
+    return null;
+}
+
+List<String> getPotentialAuthors(List<String> tags, List<String> sources) {
+    if (tags.isEmpty || sources.isEmpty) {
+        return const [];
+    }
+
+    final List<String> authors = [];
+
+    for (var tag in tags) {
+        for (var source in sources) {
+            var check = checkForPotentialAuthor(tag, source);
+            if (check == null) continue;
+            authors.add(check);
+        }
+    }
+
+    return authors;
 }

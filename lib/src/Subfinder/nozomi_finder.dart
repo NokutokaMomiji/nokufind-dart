@@ -1,12 +1,12 @@
 
 
 import "subfinder.dart";
-import "../Utils/hitomi_api.dart";
+import "../Utils/nozomi_api.dart";
 import "../post.dart";
 import "../comment.dart";
 import "../note.dart";
 
-class HitomiFinder implements ISubfinder {
+class NozomiFinder implements ISubfinder {
     static Post toPost(Map<String, dynamic> postData) {
         return Post(
             postID: postData["postID"], 
@@ -14,35 +14,33 @@ class HitomiFinder implements ISubfinder {
             sources: [], 
             images: postData["images"], 
             authors: postData["artists"],
-            source: "hitomi", 
+            source: "nozomi", 
             preview: postData["preview"], 
             md5: postData["hashes"],
-            rating: "e", 
+            rating: null, 
             parentID: null, 
             dimensions: postData["dimensions"], 
             poster: "Unknown",
             posterID: null, 
             title: postData["title"]
-        )..setHeaders({"Referer": "https://hitomi.la"});
+        )..setHeaders({"Referer": "https://nozomi.la"});
     }
 
     static Comment toComment(Map<String, dynamic> commentData) {
-        throw Exception("Hitomi has no concept of comments. Do not use \"toComment\".");
+        throw Exception("Nozomi has no concept of comments. Do not use \"toComment\".");
     }
 
     static Note toNote(Map<String, dynamic> noteData) {
-        throw Exception("Hitomi has no concept of notes. Do not use \"toNote\".");
+        throw Exception("Nozomi has no concept of notes. Do not use \"toNote\".");
     }
 
-    final HitomiAPI _client = HitomiAPI();
+    final NozomiAPI _client = NozomiAPI();
     final _config = SubfinderConfiguration();
 
 
     @override
     Future<List<Post>> searchPosts(String tags, {int limit = 100, int? page}) async {
         page = (page == null) ? 1 : page;
-        
-        await _client.configureCommon();
 
         var rawPosts = await _client.searchPosts(tags, limit: limit, page: page);
 
@@ -52,8 +50,6 @@ class HitomiFinder implements ISubfinder {
     @override
     Future<Post?> getPost(int postID) async {
         if (postID <= 0) return null;
-
-        await _client.configureCommon();
 
         var rawPost = await _client.getPost(postID);
 

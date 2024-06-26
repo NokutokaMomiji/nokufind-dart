@@ -23,7 +23,7 @@ class NHentaiAPI {
     static const String _randomUrl = "https://nhentai.net/random/";
     static const String _userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36 OPR/109.0.0.0";
 
-    final Dio _client = Dio()..httpClientAdapter = Http2Adapter(ConnectionManager(idleTimeout: Duration(seconds: 15)));
+    final Dio _client = Dio()..httpClientAdapter = Http2Adapter(ConnectionManager(idleTimeout: const Duration(seconds: 15)));
     //final _dateFormat = DateFormat("yyyy-MM-dd HH:mm:ss");
     
     final String _cfClearance;
@@ -69,7 +69,7 @@ class NHentaiAPI {
                 Element? searchResultsContainer = document.querySelector("div .container");
 
                 if (searchResultsContainer == null) {
-                    Nokulog.logger.e("No search results container.");
+                    Nokulog.logger.e("No search results container found.");
                     return rawPosts;
                 }
                 
@@ -90,8 +90,8 @@ class NHentaiAPI {
                         continue;
                     }
                 
-                    Nokulog.logger.d(tagResults.outerHtml);
-                    Nokulog.logger.d(tagResults.attributes["href"]);
+                    //Nokulog.logger.d(tagResults.outerHtml);
+                    //Nokulog.logger.d(tagResults.attributes["href"]);
                     String? tempID = tagResults.attributes["href"]?.split("/")[2];
                 
                     if (tempID == null) {
@@ -126,15 +126,15 @@ class NHentaiAPI {
             }
 
             return rawPosts;
-        } catch (e) {
-            Nokulog.logger.d(e);
+        } catch (e, stackTrace) {
+            Nokulog.logger.d("Failed to fetch posts matching \"$tags\".", error: e, stackTrace: stackTrace);
             return rawPosts;
         }
     }
 
     Future<Map<String, dynamic>?> getPost(int postID) async {
         try {
-            Nokulog.logger.d("Getting post with id $postID");
+            //Nokulog.logger.d("Getting post with id $postID");
             Map<String, dynamic> result = await _makeRequest("${_url}gallery/$postID") as Map<String, dynamic>;
 
             if (result.containsKey("error")) {
@@ -179,7 +179,8 @@ class NHentaiAPI {
             myResult["poster"] = ((result["scanlator"] as String).isEmpty) ? null : result["scanlator"];
 
             return myResult;
-        } on DioException {
+        } catch(e, stackTrace) {
+            Nokulog.logger.e("Failed to fetch post with ID $postID.", error: e, stackTrace: stackTrace);
             return null;
         }
     }
@@ -189,10 +190,10 @@ class NHentaiAPI {
         
         if (postID == null) {
             try {
-                Response<String> response = await _client.get(Uri.parse(_randomUrl).toString());
-                Nokulog.logger.d("headers:");
-                Nokulog.logger.d(response.headers);
-            } on DioException {
+                Response<String> response = await _client.get(_randomUrl);
+                Nokulog.logger.d(response.redirects.map((e) => e.toString()));
+            } catch(e, stackTrace) {
+                Nokulog.logger.e("Failed to fetch random post.", error: e, stackTrace: stackTrace);
                 return [];
             }
         }
@@ -217,7 +218,8 @@ class NHentaiAPI {
             }
 
             return rawComments;
-        } catch (e) {
+        } catch (e, stackTrace) {
+            Nokulog.logger.e("Failed to fetch comments for post ID $postID.", error: e, stackTrace: stackTrace);
             return rawComments;
         }
     }
@@ -231,7 +233,11 @@ class NHentaiAPI {
 
         try {
             return rawComments.firstWhere((element) => element["id"] == commentID);
-        } on StateError {
+        } on StateError catch (e, stackTrace) {
+            Nokulog.logger.e("No comment with ID $commentID for post $postID exists.", error: e, stackTrace: stackTrace);
+            return null;
+        } catch(e, stackTrace) {
+            Nokulog.logger.e("Unexpected exception when fetching comment.", error: e, stackTrace: stackTrace);
             return null;
         }
     }
@@ -278,6 +284,8 @@ class NHentaiAPI {
 
         if (response.data == null) {
             throw DioException(
+                stackTrace: StackTrace.current,
+                type: DioExceptionType.badResponse,
                 requestOptions: response.requestOptions,
                 response: response,
                 message: "Response data was null"

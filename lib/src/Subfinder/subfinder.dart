@@ -8,7 +8,7 @@ class SubfinderConfiguration {
     final Map<String, dynamic> _config = {};
     final Map<String, String> _headers = {};
     final Map<String, String> _cookies = {};
-    bool setProperties = false;
+    bool _setProperties = false;
 
     SubfinderConfiguration({Function(String, dynamic, bool, bool)? callback}) {
         _callback = callback;
@@ -63,7 +63,7 @@ class SubfinderConfiguration {
         _callback!(key, value, false, false);
     }
 
-    dynamic getConfig(String key, {dynamic defaultValue}) {
+    T? getConfig<T>(String key, {T? defaultValue}) {
         if (!_config.containsKey(key)) {
             return defaultValue;
         }
@@ -72,7 +72,7 @@ class SubfinderConfiguration {
     }
 
     void setProperty(String key, dynamic defaultValue) {
-        if (setProperties) {
+        if (_setProperties) {
             throw StateError("Do not use setProperty. Use setConfig, setHeaders or setCookies instead.");
         }
 
@@ -81,6 +81,10 @@ class SubfinderConfiguration {
         }
 
         _config[key] = defaultValue;
+    }
+
+    void lockProperties() {
+        _setProperties = true;
     }
 
     void setCallback(Function(String, dynamic, bool, bool)? callback) {

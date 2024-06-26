@@ -10,7 +10,7 @@ import "../Utils/utils.dart";
 class KonachanAPI {
     static const String _url = "https://konachan.com/";
 
-    final Dio _client = Dio()..httpClientAdapter = Http2Adapter(ConnectionManager(idleTimeout: Duration(seconds: 15)));
+    final Dio _client = Dio()..httpClientAdapter = Http2Adapter(ConnectionManager(idleTimeout: const Duration(seconds: 15)));
     final _dateFormat = DateFormat("EEE MMM dd HH:mm:ss yyyy");
 
     KonachanAPI() {
@@ -127,9 +127,8 @@ class KonachanAPI {
 
     Future<dynamic> _makeRequest(String file, {Map<String, String>? params}) async {
         String paramString = (params != null) ? mapToPairedString(params) : "";
-        Uri requestURL = Uri.parse("$_url$file?$paramString");
         
-        Response<String> response = await _client.get(requestURL.toString());
+        Response<String> response = await _client.get("$_url$file?$paramString");
 
         if (response.data == null) {
             throw DioException(

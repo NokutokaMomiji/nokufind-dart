@@ -39,8 +39,6 @@ class DanbooruFinder implements ISubfinder {
     }
 
     static Comment toComment(Map<String, dynamic> commentData) {
-        Nokulog.logger.d("raw comment data.");
-        Nokulog.logger.d(commentData);
         return Comment(
             commentID: commentData["id"], 
             postID: commentData["post_id"], 
@@ -82,7 +80,15 @@ class DanbooruFinder implements ISubfinder {
 
         var rawPost = await _client.getPost(postID);
 
-        return (rawPost != null) ? toPost(rawPost) : null;
+        if (rawPost == null) {
+            return null;
+        }
+
+        if (!rawPost.containsKey("md5") || !rawPost.containsKey("file_url")) {
+            return null;
+        }
+
+        return toPost(rawPost);
     }
 
     @override
@@ -206,9 +212,12 @@ class DanbooruFinder implements ISubfinder {
         List<Post> filteredPosts = totalPosts.where((element) {
             for (String tag in parsedTags) {
                 if (tag.startsWith("rating:") || tag.startsWith("has:")) continue;
-                if (!element.tags.contains(tag)) {
-                    return false;
+                for (Tag tagObject in element.tags) {
+                    if (tagObject.contains(tag)) {
+                        return true;
+                    }
                 }
+                return false;
             }
             
             return true;
