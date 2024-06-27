@@ -180,7 +180,7 @@ class NozomiAPI {
 
         try {
             String postPath = fullPathFromHash(postID.toString());
-            Response<String> postRequest = await _client.get("${_url}post/$postPath.json");
+            Response<String> postRequest = await _client.get("${_url}post/$postPath.json", options: Options(responseType: ResponseType.plain));
             String? responseData = postRequest.data;
 
             if (responseData == null) return jsonData;

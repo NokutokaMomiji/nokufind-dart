@@ -35,6 +35,14 @@ class Tag {
         return original.startsWith(pattern, index) || translated.startsWith(pattern, index);
     }
 
+    Tag toLowerCase() {
+        if (original.toLowerCase() == original && translated.toLowerCase() == translated) {
+            return this;
+        }
+
+        return Tag(original.toLowerCase(), translated: translated.toLowerCase());
+    }
+
     Map<String, dynamic> toMap() {
         return {
             "original": original,

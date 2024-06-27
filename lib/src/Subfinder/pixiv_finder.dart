@@ -228,10 +228,12 @@ class PixivFinder implements ISubfinder {
         while (currentSize == checkSize) {
             int currentOffset = ((currentPage - 1) * defaultSize);
 
-            var results = (artistID == null) ? await _client.searchIllust(tags, offset: currentOffset) : await _client.userIllusts(artistID, offset: currentOffset);
+            var results = (artistID == null) ? ((tags.isEmpty) ? await _client.illustRanking() : await _client.searchIllust(tags, offset: currentOffset)) 
+                            : await _client.userIllusts(artistID, offset: currentOffset);
+
             var rawPosts = List<Map<String, dynamic>>.from((results["illusts"] as List).map((element) => Map<String, dynamic>.from(element)));
             
-            if (rawPosts.isEmpty && shouldCheckForArtist) {
+            if (rawPosts.length < 5 && shouldCheckForArtist) {
                 Nokulog.logger.w("Search for \"$tags\" returned empty. Checking if artist.");
                 var artistData = await _client.searchUser(tags);
                 
