@@ -54,8 +54,13 @@ class DownloadStream {
     FutureOr<void> Function()? onFinished;
 
     DownloadStream(postList) {
+        _stream = _controller.stream.asBroadcastStream();
         _postList = List<Post>.from(postList);
-        if (_postList.isEmpty) return;
+
+        if (_postList.isEmpty) {
+            cancel();
+            return;
+        }
 
         _controller.onCancel = cancel;
         _stream = _controller.stream.asBroadcastStream();

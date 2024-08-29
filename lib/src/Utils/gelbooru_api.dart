@@ -5,11 +5,13 @@ import "package:dio_http2_adapter/dio_http2_adapter.dart";
 import "package:html/dom.dart";
 import "package:intl/intl.dart";
 import "package:xml/xml.dart";
+import "package:html_unescape/html_unescape_small.dart";
 
 import "../Utils/utils.dart";
 
 class GelbooruAPI {
     static const String _url = "https://gelbooru.com/";
+    static final HtmlUnescape _unescape = HtmlUnescape();
 
     final Dio _client = Dio()..httpClientAdapter = Http2Adapter(ConnectionManager(idleTimeout: const Duration(seconds: 15)));
     final _dateFormat = DateFormat("yyyy-MM-dd HH:mm:ss");
@@ -41,7 +43,7 @@ class GelbooruAPI {
             var contentMap = await _makeRequest("index.php", params: params) as Map<String, dynamic>;
             
             if (!contentMap.containsKey("post")) {
-                Nokulog.logger.d("Error: Didn't find key with name post for index.php?${mapToPairedString(params)}.");
+                Nokulog.d("Error: Didn't find key with name post for index.php?${mapToPairedString(params)}.");
                 return [];
             }
             
@@ -49,6 +51,7 @@ class GelbooruAPI {
             
             for (int i = 0; i < results.length; i++) {
                 results[i] = Map<String, dynamic>.from(results[i]);
+                results[i]["tags"] = _unescape.convert(results[i]["tags"]);
             }
 
             return List<Map<String, dynamic>>.from(results);
@@ -203,7 +206,7 @@ class GelbooruAPI {
         String paramString = (params != null) ? mapToPairedString(params) : "";
         Uri requestURL = Uri.parse("$_url$file?$paramString");
 
-        Nokulog.logger.d(requestURL);
+        Nokulog.d(requestURL);
         
         Response<String> response = await _client.get(requestURL.toString());
 

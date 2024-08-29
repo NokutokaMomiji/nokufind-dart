@@ -5,7 +5,7 @@ import "dart:math";
 import "package:async/async.dart";
 
 import "subfinder.dart";
-import "../Utils/gelbooru_api.dart";
+import "../Utils/safebooru_api.dart";
 import "../Utils/utils.dart";
 import "../post.dart";
 import "../comment.dart";
@@ -20,22 +20,22 @@ List<Map<String, dynamic>> _filterInvalidComments(List<Map<String, dynamic>> com
     return comments.where((element) => element.containsKey("body") && !element["is_deleted"]).toList();
 }*/
 
-class GelbooruFinder implements ISubfinder {
+class SafebooruFinder implements ISubfinder {
     static Post toPost(Map<String, dynamic> postData) {
         return Post(
             postID: postData["id"], 
-            tags: (postData["tags"] as String).split(" "), 
-            sources: (postData["source"] as String).split(" "), 
+            tags: List<String>.from(postData["tags"]), 
+            sources: [], 
             images: [postData["file_url"]], 
             authors: [], //(postData["tag_string_artist"] as String).split(" "), 
-            source: "gelbooru", 
+            source: "safebooru", 
             preview: postData["preview_url"], 
-            md5: [postData["md5"]], 
+            md5: [postData["hash"]], 
             rating: postData["rating"], 
             parentID: (postData["parent_id"] != 0) ? postData["parent_id"] : null, 
             dimensions: [[postData["width"], postData["height"]]], 
             poster: postData["owner"],
-            posterID: postData["creator_id"], 
+            posterID: null, 
             title: null
         );
     }
@@ -47,7 +47,7 @@ class GelbooruFinder implements ISubfinder {
             creatorID: commentData["creator_id"],
             creator: commentData["creator"] ?? "User ${commentData['creator_id']}",
             body: commentData["body"], 
-            source: "gelbooru",
+            source: "safebooru",
             createdAt: commentData["created_at"] as DateTime
         );
     }
@@ -61,17 +61,19 @@ class GelbooruFinder implements ISubfinder {
             width: noteData["width"], 
             height: noteData["height"], 
             body: noteData["body"], 
-            source: "gelbooru", 
+            source: "safebooru", 
             postID: noteData["post_id"]
         );
     }
 
-    final GelbooruAPI _client = GelbooruAPI();
+    final SafebooruApi _client;
     final _config = SubfinderConfiguration();
     final List<CancelableCompleter> _completers = [];
 
+    SafebooruFinder() : _client = SafebooruApi();
+
     @override
-    Future<List<Post>> searchPosts(String tags, {int limit = 100, int? page}) async {
+    Future<List<Post>> searchPosts(String tags, {int limit = 1000, int? page}) async {
         page = (page == null) ? 0 : page - 1;
         page = (page < 0) ? 0 : page;
 
@@ -148,13 +150,13 @@ class GelbooruFinder implements ISubfinder {
         lastCompleter.operation.cancel();
     }
 
-    Future<List<Post>> _getAllPosts(String tags, CancelableCompleter completer, {int limit = 100, int? page}) async {
+    Future<List<Post>> _getAllPosts(String tags, CancelableCompleter completer, {int limit = 1000, int? page}) async {
         if (completer.isCanceled) return [];
 
         page = (page == null) ? 0 : page;
 
         List<Post> currentPosts = [];
-        int defaultSize = 100;
+        int defaultSize = 1000;
         int checkSize = min(defaultSize, limit);
         int currentSize = checkSize;
         int currentPage = page;
@@ -163,8 +165,9 @@ class GelbooruFinder implements ISubfinder {
             if (completer.isCanceled) return [];
 
             var rawPosts = await _client.searchPosts(tags, limit: checkSize, page: currentPage);
+
             if (completer.isCanceled) return [];
-            
+
             currentSize = rawPosts.length;
 
             //rawPosts = _filterInvalidPosts(rawPosts);

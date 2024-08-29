@@ -9,62 +9,160 @@ import 'package:logger/logger.dart';
 const String userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36 OPR/109.0.0.0";
 const String pixivReferer = "https://app-api.pixiv.net/";
 
+enum NokulogMode {
+    base,
+    all,
+    errors,
+    onlyErrors,
+    off
+}
+
+enum NokulogEventType {
+    debug,
+    info,
+    warning,
+    error,
+    trace
+}
+
 class ErrorFilter extends LogFilter {
     @override
     bool shouldLog(LogEvent event) {
-        var shouldLog = false;
-        
-        assert(() {
-            if (event.level.value >= level!.value) {
-                shouldLog = true;
-            }
-            return true;
-        }());
+        switch (Nokulog.mode) {
+            case NokulogMode.base:
 
-        if (event.level.value >= Level.warning.value && event.level.value != Level.off.value) {
+            var shouldLog = false;
+            assert(() {
+                if (event.level.value >= level!.value) {
+                    shouldLog = true;
+                }
+                return true;
+            }());
+
+            if (event.level.value >= Level.warning.value && event.level.value != Level.off.value) {
+                return true;
+            }
+
+            return shouldLog;
+        
+            case NokulogMode.all:
             return true;
+            
+            case NokulogMode.errors:
+            if (event.level.value >= Level.warning.value && event.level.value != Level.off.value) {
+                return true;
+            }
+            break;
+
+            case NokulogMode.onlyErrors:
+            return (event.level.value == Level.error.value);
+
+            case NokulogMode.off:
+            return false;
         }
 
-        return shouldLog;
+        return false;
     }
 }
 
-class ListLog extends LogOutput {
-    @override
-    void output(OutputEvent event) {
-        Nokulog.log.addAll(event.lines);
-        event.lines.forEach(print);
-    }
+class NokulogEvent {
+    final NokulogEventType eventType;
+    final dynamic message;
+    final DateTime time;
+    final Object? error;
+    final StackTrace stackTrace;
+
+    NokulogEvent(this.eventType, this.message, {DateTime? time, this.error, StackTrace? stackTrace}) : time = DateTime.now(), stackTrace = StackTrace.current;
 
 }
 
 class Nokulog {
-    static List<String> log = [];
+    static NokulogMode mode = NokulogMode.base; 
 
-    static LogFilter _filter = ErrorFilter();
-    static LogPrinter? _printer = PrettyPrinter();
+    static final List<NokulogEvent> log = [];
 
-    static Logger logger = Logger(
+    static final Logger _logger = Logger(
         filter: ErrorFilter(),
-        printer: PrettyPrinter(),
-        output: ListLog()
+        printer: PrettyPrinter()
     );
 
-    static set logErrors(bool value) {
-        Nokulog._filter = (value) ? ErrorFilter() : DevelopmentFilter();
-        logger = Logger(
-            filter: Nokulog._filter,
-            printer: Nokulog._printer,
-            output: ListLog()
+    static void d(dynamic message, {DateTime? time, Object? error, StackTrace? stackTrace}) {
+        _logger.d(message, time: time, error: error, stackTrace: stackTrace);
+
+        if (mode == NokulogMode.errors || mode == NokulogMode.off) return;
+
+        log.add(
+            NokulogEvent(
+                NokulogEventType.debug,
+                message,
+                time: time,
+                error: error,
+                stackTrace: stackTrace
+            )
         );
     }
 
-    static set logPretty(bool value) {
-        Nokulog._printer = (value) ? PrettyPrinter() : null;
-        logger = Logger(
-            filter: Nokulog._filter,
-            printer: Nokulog._printer,
-            output: ListLog()
+    static void i(dynamic message, {DateTime? time, Object? error, StackTrace? stackTrace}) {
+        _logger.i(message, time: time, error: error, stackTrace: stackTrace);
+
+        if (mode == NokulogMode.errors || mode == NokulogMode.off) return;
+
+        log.add(
+            NokulogEvent(
+                NokulogEventType.info,
+                message,
+                time: time,
+                error: error,
+                stackTrace: stackTrace
+            )
+        );
+    }
+
+    static void w(dynamic message, {DateTime? time, Object? error, StackTrace? stackTrace}) {
+        _logger.w(message, time: time, error: error, stackTrace: stackTrace);
+
+        if (mode == NokulogMode.off) return;
+
+        log.add(
+            NokulogEvent(
+                NokulogEventType.warning,
+                message,
+                time: time,
+                error: error,
+                stackTrace: stackTrace
+            )
+        );
+    }
+
+    static void e(dynamic message, {DateTime? time, Object? error, StackTrace? stackTrace}) {
+        _logger.e(message, time: time, error: error, stackTrace: stackTrace);
+
+        if (mode == NokulogMode.off) return;
+
+        log.add(
+            NokulogEvent(
+                NokulogEventType.error,
+                message,
+                time: time,
+                error: error,
+                stackTrace: stackTrace
+            )
+        );
+    }
+
+    static void t(dynamic message, {DateTime? time, Object? error, StackTrace? stackTrace}) {
+        _logger.t(message, time: time, error: error, stackTrace: stackTrace);
+
+        if (mode == NokulogMode.off) return;
+        
+        log.add(
+            NokulogEvent(
+                NokulogEventType.trace,
+                message,
+                time: time,
+                error: error,
+                stackTrace: stackTrace
+            )
         );
     }
 }
@@ -116,6 +214,34 @@ List<String> parseTags(String tags) {
     }
 
     tagList.add(currentText);
+    return tagList;
+}
+
+List<String> parseTagsWithQuotes(String tags) {
+    String currentText = "";
+    List<String> tagList = [];
+    bool inQuotations = false;
+
+    for (int index = 0; index < tags.length; index++) {
+        var char = tags[index];
+        if (char == " " && !inQuotations) {
+            tagList.add(currentText);
+            currentText = "";
+            continue;
+        }
+
+        if (char == '"') {
+            inQuotations = !inQuotations;
+            continue;
+        }
+
+        currentText += char;
+    }
+
+    if (currentText.isNotEmpty) {
+        tagList.add(currentText);
+    }
+
     return tagList;
 }
 
@@ -175,7 +301,7 @@ void addSmartRetry(Dio dio) {
     dio.interceptors.add(
         RetryInterceptor(
             dio: dio,
-            logPrint: Nokulog.logger.e,
+            logPrint: Nokulog.e,
             retries: 5,
             retryDelays: [
                 const Duration(seconds: 1),

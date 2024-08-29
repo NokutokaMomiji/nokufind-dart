@@ -32,7 +32,7 @@ class DanbooruAPI {
 
             return List<Map<String, dynamic>>.from(results);
         } catch (e, stackTrace) {
-            Nokulog.logger.e("Failed to find posts matching \"$tags\"", error: e, stackTrace: stackTrace);
+            Nokulog.e("Failed to find posts matching \"$tags\"", error: e, stackTrace: stackTrace);
             return [];
         }
     }
@@ -41,7 +41,7 @@ class DanbooruAPI {
         try {
             return await _makeRequest("posts/$postID.json") as Map<String, dynamic>;
         } catch (e, stackTrace) {
-            Nokulog.logger.e("Failed to fetch post $postID.", error: e, stackTrace: stackTrace);
+            Nokulog.e("Failed to fetch post $postID.", error: e, stackTrace: stackTrace);
             return null;
         }
     }
@@ -68,7 +68,7 @@ class DanbooruAPI {
             return List<Map<String, dynamic>>.from(results);
             
         } catch (e, stackTrace) {
-            Nokulog.logger.e("Failed to fetch comments.", error: e, stackTrace: stackTrace);
+            Nokulog.e("Failed to fetch comments.", error: e, stackTrace: stackTrace);
             return [];
         }
     }
@@ -81,7 +81,7 @@ class DanbooruAPI {
         try {
             return await _makeRequest("comments/$commentID.json") as Map<String, dynamic>;
         } catch (e, stackTrace) {
-            Nokulog.logger.e("Failed to fetch comment with ID $commentID.", error: e, stackTrace: stackTrace);
+            Nokulog.e("Failed to fetch comment with ID $commentID.", error: e, stackTrace: stackTrace);
             return null;
         }
     }
@@ -100,7 +100,7 @@ class DanbooruAPI {
 
             return List<Map<String, dynamic>>.from(results);
         } catch (e, stackTrace) {
-            Nokulog.logger.e("Failed to fetch notes for post $postID.", error: e, stackTrace: stackTrace);
+            Nokulog.e("Failed to fetch notes for post $postID.", error: e, stackTrace: stackTrace);
             return [];
         }
     }
@@ -108,7 +108,7 @@ class DanbooruAPI {
     Future<dynamic> _makeRequest(String file, {Map<String, String>? params}) async {
         String paramString = (params != null) ? mapToPairedString(params) : "";
         Uri requestURL = Uri.parse("$_url$file?$paramString");
-        Nokulog.logger.d(requestURL.toString());
+        Nokulog.d(requestURL.toString());
         
         _client.options.validateStatus = (status) => true;
         _client.options.headers["User-Agent"] = userAgent;

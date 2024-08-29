@@ -88,7 +88,7 @@ class YandereAPI {
                 "created_at": _dateFormat.parseLoose((dateObject.attributes["title"] as String).replaceAll("Posted at", "").trim())
             };
 
-            Nokulog.logger.d(comment);
+            Nokulog.d(comment);
             results.add(comment);
         }
 

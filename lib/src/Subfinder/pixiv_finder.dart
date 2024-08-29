@@ -1,5 +1,8 @@
+import "dart:collection";
 import "dart:convert";
 import "dart:math";
+import "package:async/async.dart";
+import "package:executor/executor.dart";
 import "package:intl/intl.dart";
 
 import "subfinder.dart";
@@ -11,6 +14,7 @@ import "../note.dart";
 
 class PixivFinder implements ISubfinder {
     static final Map<String, int> _artists = {};
+    static final HashSet<int> _artistIDs = HashSet<int>();
     static final String formatString = "yyyy-MM-dd'T'HH:mm:ssZ";
     static final DateFormat formatter = DateFormat(formatString);
 
@@ -33,7 +37,7 @@ class PixivFinder implements ISubfinder {
         try {
             tags = originalTags.map<Tag>((element) => Tag(element["name"], translated: element["translated_name"] ?? "")).toList();
         } catch (e, stackTrace) {
-            Nokulog.logger.e(jsonEncode(postData), error: e, stackTrace: stackTrace);
+            Nokulog.e(jsonEncode(postData), error: e, stackTrace: stackTrace);
         }
 
         String artistName = postData["user"]["name"].toString();
@@ -42,6 +46,12 @@ class PixivFinder implements ISubfinder {
         if (!originalTags.contains(artistName)) {
             tags.add(Tag(artistName));
         }
+
+        if (postData["illust_ai_type"] == 2) {
+            tags.add(Tag("AI-generated"));
+        }
+
+        tags.add(Tag("artist:$artistID"));
 
         _artists[artistName] = artistID;
 
@@ -98,6 +108,7 @@ class PixivFinder implements ISubfinder {
 
     final AppPixivAPI _client = AppPixivAPI();
     final _config = SubfinderConfiguration();
+    final List<CancelableCompleter> _completers = [];
     final String refreshToken;
 
     bool _hasAuth = false;
@@ -117,7 +128,19 @@ class PixivFinder implements ISubfinder {
         
         page = (page == null || page <= 0) ? 1 : page;
 
-        return await _getAllPosts(tags, limit: limit, page: page);
+        CancelableCompleter<List<Post>> completer = CancelableCompleter(
+            onCancel: () {
+                Nokulog.w("Search for \"$tags\" was cancelled.");
+            }
+        );
+
+        var searchFuture = _getAllPosts(tags, completer, limit: limit, page: page);
+
+        _completers.add(completer);
+
+        completer.complete(searchFuture);
+
+        return completer.operation.value;
     }
 
     @override
@@ -130,15 +153,19 @@ class PixivFinder implements ISubfinder {
         try {
             rawPost = (await _client.illustDetail(postID))["illust"];
 
+            Nokulog.d(rawPost);
+
             if (_config.getConfig<bool>("use_lower_quality", defaultValue: false) == true) {
                 rawPost?["use_lower_quality"] = true;
             }
 
         } catch(e, stackTrace) {
-            Nokulog.logger.e("Failed to fetch Pixiv post $postID.", error: e, stackTrace: stackTrace);
+            Nokulog.e("Failed to fetch Pixiv post $postID.", error: e, stackTrace: stackTrace);
         }
 
-        return (rawPost != null) ? toPost(rawPost) : null;
+        var result = (rawPost != null) ? toPost(rawPost) : null;
+        Nokulog.d(result);
+        return result;
     }
 
     @override
@@ -156,7 +183,7 @@ class PixivFinder implements ISubfinder {
                 var results = await _client.illustComments(postID);
                 
                 if (!results.containsKey("comments")) {
-                    Nokulog.logger.e("Map doesn't contain \"comments\" key.");
+                    Nokulog.e("Map doesn't contain \"comments\" key.");
                     return [];
                 }
 
@@ -168,7 +195,7 @@ class PixivFinder implements ISubfinder {
             }
 
         } catch (e, stackTrace) {
-            Nokulog.logger.e("Failed to fetch Pixiv comments.", error: e, stackTrace: stackTrace);
+            Nokulog.e("Failed to fetch Pixiv comments.", error: e, stackTrace: stackTrace);
         }
 
         return [for (var rawComment in rawComments) toComment(rawComment)];
@@ -185,9 +212,9 @@ class PixivFinder implements ISubfinder {
         try {
             return results.firstWhere((element) => element.commentID == commentID);
         } on StateError {
-            Nokulog.logger.w("No comment with ID $commentID exists for post $postID.");
+            Nokulog.w("No comment with ID $commentID exists for post $postID.");
         } catch(e, stackTrace) {
-            Nokulog.logger.e("Unexpected error occurred whilst fetching comment.", error: e, stackTrace: stackTrace);
+            Nokulog.e("Unexpected error occurred whilst fetching comment.", error: e, stackTrace: stackTrace);
         }
 
         return null;
@@ -208,8 +235,22 @@ class PixivFinder implements ISubfinder {
         return const [];
     }
 
-    Future<List<Post>> _getAllPosts(String tags, {int limit = 30, int? page}) async {
+    @override
+    Future<void> cancelLastSearch() async {
+        if (_completers.isEmpty) return;
+
+        var lastCompleter = _completers.removeLast();
+        lastCompleter.operation.cancel();
+    }
+
+    Future<List<Post>> _getAllPosts(String tags, CancelableCompleter completer, {int limit = 30, int? page, bool canUseExecutor = false}) async {
+        if (completer.isCanceled) return [];
+
         page = (page == null || page <= 0) ? 1 : page;
+
+        if (tags.contains("artist:")) {
+            return _getPostsWithArtist(tags, completer, limit: limit, page: page);
+        }
 
         List<Post> currentPosts = [];
         int defaultSize = 30;
@@ -222,43 +263,134 @@ class PixivFinder implements ISubfinder {
         bool lowerQuality = _config.getConfig<bool>("use_lower_quality", defaultValue: false) == true;
 
         if (!shouldCheckForArtist) {
-            Nokulog.logger.i("Artist with name \"$tags\" ($artistID) is recorded in artist registry.");
+            Nokulog.i("Artist with name \"$tags\" ($artistID) is recorded in artist registry.");
         }
 
+        var maxCount = (limit / defaultSize).ceil();
+
+        if (canUseExecutor && maxCount > 10) {
+            Nokulog.i("Max count: $maxCount");
+            Executor executor = Executor(concurrency: maxCount, rate: Rate.perSecond(10));
+
+            for (var i = currentPage - 1; i < maxCount; ++i) {
+                if (completer.isCanceled) return [];
+
+                executor.scheduleTask(() async {
+                    if (completer.isCanceled) {
+                        await executor.close();
+                        return;
+                    }
+
+                    int currentOffset = (i * defaultSize);
+                    Map<String, dynamic> results;
+                    try {
+                        results = (artistID == null) ? ((tags.isEmpty) ? await _client.illustRanking() : await _client.searchIllust(tags, offset: currentOffset)) 
+                                : await _client.userIllusts(artistID, offset: currentOffset);
+                    } catch (e, stackTrace) {
+                        Nokulog.e("Failed to fetch Pixiv posts.", error: e, stackTrace: stackTrace);
+                        return;
+                    }
+
+                    if (!results.containsKey("illusts")) {
+                        return;
+                    }
+
+                    var rawPosts = List<Map<String, dynamic>>.from((results["illusts"] as List).map((element) => Map<String, dynamic>.from(element)));
+
+                    if (rawPosts.isEmpty) return;
+
+                    Nokulog.d("[nokufind.PixivFinder (Executor)]: Found ${rawPosts.length}.");
+
+                    currentPosts.addAll(rawPosts.map((post) {
+                        if (lowerQuality) {
+                            post["use_lower_quality"] = true;
+                        }
+                        return toPost(post);
+                    }));
+
+                    Nokulog.d("[nokufind.PixivFinder (Executor)]: Currently at ${currentPosts.length} posts.");
+                });
+            }
+            
+            try {
+                await executor.join(withWaiting: true);
+                await executor.close();
+            } catch (e, stackTrace) {
+                Nokulog.e("In executor of Pixiv.", error: e, stackTrace: stackTrace);
+            }
+
+            currentPosts.sort((a, b) => a.postID.compareTo(b.postID));
+
+            if (currentPosts.length > limit) {
+                currentPosts = currentPosts.sublist(0, limit);
+            }
+
+            return currentPosts;
+        }
+
+        int tries = 0;
+        final int maxTries = 5;
+
         while (currentSize == checkSize) {
+            if (completer.isCanceled || tries >= maxTries) return [];
             int currentOffset = ((currentPage - 1) * defaultSize);
 
-            var results = (artistID == null) ? ((tags.isEmpty) ? await _client.illustRanking() : await _client.searchIllust(tags, offset: currentOffset)) 
-                            : await _client.userIllusts(artistID, offset: currentOffset);
+            Map<String, dynamic> results;
+            try {
+                results = (artistID == null) ? ((tags.isEmpty) ? await _client.illustRanking() : await _client.searchIllust(tags, offset: currentOffset)) 
+                        : await _client.userIllusts(artistID, offset: currentOffset);
+            } catch (e, stackTrace) {
+                Nokulog.e("Failed to fetch Pixiv posts.", error: e, stackTrace: stackTrace);
+                tries++;
+                continue;
+            }
+            if (completer.isCanceled) return [];
+
+            if (!results.containsKey("illusts")) {
+                break;
+            }
 
             var rawPosts = List<Map<String, dynamic>>.from((results["illusts"] as List).map((element) => Map<String, dynamic>.from(element)));
             
             if (rawPosts.length < 5 && shouldCheckForArtist) {
-                Nokulog.logger.w("Search for \"$tags\" returned empty. Checking if artist.");
+                Nokulog.w("Search for \"$tags\" returned empty. Checking if artist.");
                 var artistData = await _client.searchUser(tags);
                 
                 if ((artistData["user_previews"] as List).isEmpty) {
-                    Nokulog.logger.w("No artists or users with name \"$tags\" found. Breaking.");
+                    Nokulog.w("No artists or users with name \"$tags\" found. Breaking.");
                     break;
                 }
 
-                Nokulog.logger.i("Found artist! Storing in record and starting anew.");
+                Nokulog.i("Found artist! Storing in record and starting anew.");
                 
                 for (var artist in (artistData["user_previews"] as List)) {
                     int currentID = artist["user"]["id"];
                     String currentName = artist["user"]["name"];
 
-                    _artists[currentName] = currentID;
+                    if (!_artists.containsKey(currentName)) {
+                        Nokulog.i("Adding \"$currentName\" to artist registry.");
+                        _artists[currentName] = currentID;
+                    }
+
+                    _artistIDs.add(currentID);
 
                     if (artistID != null) continue;
 
                     artistID = currentID;
+                    shouldCheckForArtist = false;
+                    Nokulog.i("artistID is now $artistID");
+                }
+
+                if (completer.isCanceled) return [];
+
+                if (maxCount > 10) {
+                    return _getAllPosts(tags, completer, limit: limit, canUseExecutor: true);
                 }
 
                 continue;
             }
 
-            Nokulog.logger.d("[nokufind.PixivFinder]: Found ${rawPosts.length}.");
+            Nokulog.d("[nokufind.PixivFinder]: Found ${rawPosts.length}.");
 
             currentSize = rawPosts.length;
             currentPosts.addAll(rawPosts.map((post) {
@@ -268,9 +400,14 @@ class PixivFinder implements ISubfinder {
                 return toPost(post);
             }));
 
-            Nokulog.logger.d("[nokufind.PixivFinder]: Currently at ${currentPosts.length} posts.");
+            Nokulog.d("[nokufind.PixivFinder]: Currently at ${currentPosts.length} posts.");
 
             if (currentPosts.length >= limit) {
+                break;
+            }
+
+            if (maxCount > 10) {
+                currentPosts += await _getAllPosts(tags, completer, limit: limit, canUseExecutor: true);
                 break;
             }
 
@@ -284,6 +421,151 @@ class PixivFinder implements ISubfinder {
         }
 
         return currentPosts;
+    }
+
+    Future<List<Post>> _getPostsWithArtist(String tags, CancelableCompleter completer, {int limit = 30, int page = 1}) async {
+        if (completer.isCanceled) return [];
+
+        final List<String> tagList = parseTagsWithQuotes(tags);
+        final Executor executor = Executor(concurrency: tagList.length);
+
+        List<Post> currentPosts = [];
+        int defaultSize = 30;
+        int checkSize = min(defaultSize, limit);
+        bool lowerQuality = _config.getConfig<bool>("use_lower_quality", defaultValue: false) == true;
+
+        final HashSet<String> artistTags = HashSet.from(tagList.where((item) => item.startsWith("artist:") || _artists.containsKey(item)));
+
+        List<Map<String, dynamic>> totalRawPosts = [];
+
+        for (String tag in artistTags) {
+            int? artistID;
+
+            if (tag.startsWith("artist:")) {
+                String lastPart = tag.replaceAll("artist:", "");
+                int? possibleID = int.tryParse(lastPart);
+
+                if (possibleID != null && !_artistIDs.contains(possibleID)) {
+                    // In the case that the ID is an actual valid user ID, we should fetch the name to store it internally.
+                    executor.scheduleTask(() async {
+                        try {
+                            var artist = await _client.userDetail(possibleID);
+
+                            String name = artist["user"]["name"];
+
+                            if (!_artists.containsKey(name)) _artists[name] = possibleID;
+                        
+                            _artistIDs.add(possibleID);
+                        } catch (e, stackTrace) {
+                            Nokulog.e("No artist with given ID $possibleID found.", error: e, stackTrace: stackTrace);
+                        }
+                    });
+                }
+
+                artistID = possibleID ?? await _getArtistID(lastPart);
+
+                if (artistID == null) {
+                    Nokulog.w("Artist ID is null.");
+                    await executor.close();
+                    return [];
+                }
+            }
+
+            artistID ??= _artists[tag]!;
+
+            executor.scheduleTask(() async {
+                if (completer.isCanceled) return;
+
+                Nokulog.d("Inside task.");
+                int currentSize = checkSize;
+                int currentPage = page;
+
+                while (currentSize == checkSize) {
+                    try {
+                        Nokulog.d("currentPage: $currentPage");
+                        int currentOffset = (currentPage - 1) * defaultSize;
+                        var results = await _client.userIllusts(artistID, offset: currentOffset);
+
+                        if (completer.isCanceled) return;
+
+                        var rawPosts = List<Map<String, dynamic>>.from((results["illusts"] as List).map((element) => Map<String, dynamic>.from(element)));    
+                        currentSize = rawPosts.length;
+
+                        totalRawPosts.addAll(rawPosts);
+
+                        currentPage++;
+                    } catch (e, stackTrace) {
+                        Nokulog.e("Error occured while fetching posts from user \"$tag\" ($artistID).", error: e, stackTrace: stackTrace);
+                    }
+                }
+            });
+        }
+
+        await executor.join(withWaiting: true);
+
+        if (completer.isCanceled) return [];
+
+        currentPosts.addAll(totalRawPosts.map((post) {
+            if (lowerQuality) {
+                post["use_lower_quality"] = true;
+            }
+            return toPost(post);
+        }));
+
+        if (tagList.length != artistTags.length) {
+            currentPosts.removeWhere((item) {
+                for (var tag in tagList) {
+                    if (artistTags.contains(tag)) return false;
+                    
+                    bool shouldRemove = true;
+                    for (var innerTag in item.tags) {
+                        if (innerTag.contains(tag)) {
+                            shouldRemove = false;
+                            break;
+                        }
+                    }
+
+                    if (shouldRemove) {
+                        return true;
+                    }
+                }
+
+                return false;
+            });
+        }
+
+        if (currentPosts.length > limit) {
+            currentPosts = currentPosts.sublist(0, limit);
+        }
+
+        return currentPosts;
+    }
+
+    Future<int?> _getArtistID(String artistName) async {
+        int? artistID;
+        var artistData = await _client.searchUser(artistName);
+                
+        if ((artistData["user_previews"] as List).isEmpty) {
+            Nokulog.w("No artists or users with name \"$artistName\" found. Returning.");
+            return null;
+        }
+
+        Nokulog.i("Found artist! Storing in record and starting anew.");
+        
+        for (var artist in (artistData["user_previews"] as List)) {
+            int currentID = artist["user"]["id"];
+            String currentName = artist["user"]["name"];
+
+            if (!_artists.containsKey(currentName)) _artists[currentName] = currentID;
+
+            _artistIDs.add(currentID);
+            
+            if (artistID != null) continue;
+
+            artistID = currentID;
+        }
+
+        return artistID;
     }
     
     Future<List<Map<String, dynamic>>> _getCommentsFromRandomPosts({int limit = 30, int? page}) async {
@@ -353,7 +635,7 @@ class PixivFinder implements ISubfinder {
             return true;
         } catch(e, stackTrace) {
             _hasAuth = false;
-            Nokulog.logger.e("Failed to authenticate user.", error: e, stackTrace: stackTrace);
+            Nokulog.e("Failed to authenticate user.", error: e, stackTrace: stackTrace);
             return false;
         }
     }

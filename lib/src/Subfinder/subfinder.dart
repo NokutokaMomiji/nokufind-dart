@@ -92,9 +92,11 @@ class SubfinderConfiguration {
     }
 }
 
-abstract interface class ISubfinder {
+abstract class ISubfinder {
+    // A subfinder must always provide a configuration object of its own.
     final _config = SubfinderConfiguration();
 
+    // A subfinder must always provide a way of searching posts.
     Future<List<Post>> searchPosts(String tags, {int limit = 100, int? page});
     Future<Post?> getPost(int postID);
 
@@ -105,6 +107,9 @@ abstract interface class ISubfinder {
     
     Future<Post?> postGetParent(Post post);
     Future<List<Post>> postGetChildren(Post post);
+
+    // A subfinder must always provide a way to cancel the last search if possible.
+    Future<void> cancelLastSearch();
 
     SubfinderConfiguration get configuration {
         return _config;

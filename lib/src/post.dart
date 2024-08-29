@@ -1,20 +1,23 @@
 import 'dart:io';
 import 'dart:convert';
 import 'dart:async';
+import 'dart:math';
 import 'dart:typed_data';
+import 'package:async/async.dart';
 import 'package:dio/dio.dart';
 import 'package:dio_http2_adapter/dio_http2_adapter.dart';
 import 'package:executor/executor.dart';
+import 'package:nokufind/src/Utils/streamed_file.dart';
 import 'Utils/utils.dart';
+
+import "package:html_unescape/html_unescape_small.dart";
+final temp = HtmlUnescape();
 
 /// Enum that represents the rating of a post.
 enum Rating { general, sensitive, questionable, explicit, unknown }
 
 Future<void> generateMD5(Post post) async {
-    var data = await post.fetchSingleImage(0);
-    if (data == null) return;
-
-    post.md5.add(calculateMD5(data));
+    
 }
 
 class Tag {
@@ -23,8 +26,8 @@ class Tag {
 
     Tag(this.original, {this.translated = ""});
 
-    factory Tag.fromMap(Map<String, String> data) {
-        return Tag(data["original"]!, translated: data["translated"]!);
+    factory Tag.fromMap(Map<String, dynamic> data) {
+        return Tag(temp.convert(data["original"].toString()), translated: temp.convert(data["translated"].toString()));
     }
 
     bool contains(Pattern other, [int startIndex = 0]) {
@@ -67,10 +70,12 @@ class Tag {
 }
 
 class Post {
-    static List<String> ratingGeneral = ["s", "safe", "general", "g"];
+    static List<String> ratingGeneral = ["safe", "general", "g"];
     static List<String> ratingSensitive = ["sensitive", "s"];
     static List<String> ratingQuestionable = ["questionable", "q"];
     static List<String> ratingExplicit = ["explicit", "e"];
+    static bool generateMissingMD5 = false;
+    static Rate? fetchRate;
 
     static Rating getRating(String? ratingString) {
         if (ratingString == null) return Rating.unknown;
@@ -132,12 +137,11 @@ class Post {
     }
 
     Map<String, dynamic> postData = {};
-    Map<String, String> headers = {
-    };
+    Map<String, String> headers = {};
     Map<String, String> cookies = {};
     final Dio _client = Dio()..httpClientAdapter = Http2Adapter(ConnectionManager(idleTimeout: const Duration(seconds: 15)));
     final Dio _fallbackClient = Dio();
-    List<Uint8List?> data = [];
+    late List<StreamedFile> data;
     Executor? _executor;
     bool _fetched = false;
 
@@ -192,7 +196,18 @@ class Post {
             postData["filenames"].add(item.split("/").last);
         });
 
-        if ((postData["md5"] as List).isEmpty) {
+        int numOfFiles = postData["images"].length;
+        data = List.unmodifiable([
+            for (int i = 0; i < numOfFiles; i++) StreamedFile(
+                url: this.images[i], 
+                filename: filenames[i], 
+                headers: headers, 
+                client: _client, 
+                fallbackClient: _fallbackClient
+            )
+        ]);
+
+        if ((postData["md5"] as List).isEmpty && generateMissingMD5) {
             Future.microtask(() => generateMD5(this));
         }
     }
@@ -211,64 +226,12 @@ class Post {
         return filePath;
     }
 
-    Future<void> fetchData({bool onlyMainImage = false, bool shouldWait = true}) async {
-        List<Uint8List?> noNulls = data.where((item) => item == null).toList();
-
-        if (images.length == data.length && noNulls.isEmpty) {
-            Nokulog.logger.w("All data has been fetched for post. Returning.");
-            return;
-        }
-
-        if (onlyMainImage && data.isEmpty) {
-            data.add(null);
-            await _requestImage(0);
-            return;
-        } else if ((onlyMainImage && data.firstOrNull != null)) {
-            return;
-        } else if ((images.length == 1) && data.firstOrNull != null) {
-            return;
-        }
-
-        Executor executor = Executor(concurrency: 10);
-        _executor = executor;
-
-        if (data.firstOrNull == null) {
-            data = List<Uint8List?>.filled(images.length, null, growable: true);
-        } else {
-            data.addAll(List<Uint8List?>.filled(images.length - 1, null));
-        }
-
-        Nokulog.logger.d("$identifier data length: ${data.length}");
-
-        for (int i = 0; i < images.length; i++) {
-            if (data[i] != null) continue;
-
-            try {
-                executor.scheduleTask(() async {
-                    Nokulog.logger.d("$identifier requesting image index: $i");
-                    await _requestImage(i);
-                });
-            } catch (e) {
-                continue;
-            }
-        }
-
-        await executor.join(withWaiting: true);
-        await executor.close();
-    }
-
-    Future<void> cancelFetch() async {
-        if (_executor == null) return;
-
-        await _executor!.close();
-        _executor = null;
-    }
-
     Future<String?> downloadImage(String path, {int index = 0}) async {
         Directory(path).createSync(recursive: true);
         String filePath = "$path/${filenames[index]}";
 
-        var possibleData = get(data, index, defaultValue: null);
+        var possibleData = get(data, index, defaultValue: null)?.data;
+
         if (possibleData != null) {
             await File(filePath).writeAsBytes(possibleData, flush: true);
             return filePath;
@@ -286,7 +249,7 @@ class Post {
             await File(filePath).writeAsBytes(response.data!, flush: true);
             return filePath;
         } catch (e, stackTrace) {
-            Nokulog.logger.w("Failed. Trying fallback client.", error: e, stackTrace: stackTrace);
+            Nokulog.w("Failed. Trying fallback client.", error: e, stackTrace: stackTrace);
         }
 
         try {
@@ -296,13 +259,13 @@ class Post {
             await File(filePath).writeAsBytes(response.data!, flush: true);
             return filePath;
         } catch (e, stackTrace) {
-            Nokulog.logger.e(requestURL, error: e, stackTrace: stackTrace);
+            Nokulog.e(requestURL, error: e, stackTrace: stackTrace);
             return null;
         }
     }
     
     Future<List<String?>> downloadAll(String path) async {
-        Executor executor = Executor(concurrency: 10);
+        Executor executor = Executor(concurrency: 10, rate: fetchRate);
         
         for (int i = 0; i < images.length; i++) {
             executor.scheduleTask(() async {
@@ -314,6 +277,12 @@ class Post {
         await executor.close();
 
         return values;
+    }
+
+    void updateHeaders() {
+        for (var file in data) {
+            file.headers = headers;
+        }
     }
 
     Post setHeaders(Map<String, String> headers) {
@@ -345,68 +314,61 @@ class Post {
             data["headers"] = headers;
             return data;
         } catch (e, stackTrace) {
-            Nokulog.logger.e("Failed to convert post to JSON.", error: e, stackTrace: stackTrace);
+            Nokulog.e("Failed to convert post to JSON.", error: e, stackTrace: stackTrace);
             rethrow;
         }
     }
 
-    void clearData([bool keepMainImage = true]) {
-        if (data.isEmpty && !_fetched) return;
+    Future<void> fetchData({bool onlyMainImage = false}) async {
+        List<StreamedFile> unfetchedFiles = data.where((file) => file.data != null).toList();
         
-        var backup = data.first;
-        data.clear();
-
-        if (keepMainImage) {
-            data.add(backup);
-        }
-        backup = null;
-
-        _fetched = false;
-    }
-
-    Future<void> _requestImage(int index) async {
-        var tempData = await fetchSingleImage(index);
-
-        //if (tempData == null) return;
-
-        if (index >= data.length) {
-            Nokulog.logger.w("_requestImage was requested to store image index $index, but data list is only ${data.length}.");
+        if ((onlyMainImage && data.first.data != null) || (unfetchedFiles.isEmpty)) {
+            Nokulog.w("All requested data has been fetched for post. Returning.");
             return;
         }
 
-        data[index] = tempData;
+        if (onlyMainImage) {
+            await data.first.awaitData();
+            return;
+        }
+
+        Executor executor = Executor(concurrency: 10, rate: fetchRate);
+        _executor = executor;
+
+        Nokulog.d("$identifier data length: ${data.length}");
+
+        for (var file in unfetchedFiles) {
+            try {
+                executor.scheduleTask(() async {
+                    Nokulog.d("$identifier requesting image \"${file.url}\"...");
+                    await file.fetchFile();
+                });
+            } catch (e, stackTrace) {
+                Nokulog.e("Failed to fetch file.", error: e, stackTrace: stackTrace);
+                continue;
+            }
+        }
+
+        await executor.join(withWaiting: true);
+        await executor.close();
     }
 
-    Future<Uint8List?> fetchSingleImage(int index) async {
-        if (data.length == images.length && data[index] != null) {
-            return data[index];
-        }
+    Future<void> cancelFetch() async {
+        Executor? executor = _executor;
 
-        Uri requestURL = Uri.parse(images[index]);
+        if (executor == null) return;
 
-        Map<String, String> temp = _prepareHeaders();
+        await executor.close();
+        _executor = null;
+    }
 
-        _client.options.headers = temp;
-        _client.options.responseType = ResponseType.bytes;
+    void clearData([bool keepMainImage = true]) async {
+        if (keepMainImage && data.length == 1) return;
 
-        try {
-            Response<Uint8List> response = await _client.get(requestURL.toString());
-            return response.data;
-        } on DioException catch (e, stackTrace) {
-            Nokulog.logger.w("HTTP2 client failed. Trying fallback client.", error: e, stackTrace: stackTrace);
-        } catch (e, stackTrace) {
-            Nokulog.logger.w("HTTP2 client failed. Trying fallback client.", error: e, stackTrace: stackTrace);
-        }
-
-        try {
-            _fallbackClient.options.headers = temp;
-            _fallbackClient.options.responseType = ResponseType.bytes;
-            Response<Uint8List> response = await _fallbackClient.get(requestURL.toString());
-            return response.data;
-        } on DioException catch (e) {
-            Nokulog.logger.i("$requestURL\n${_client.options.headers}");
-            Nokulog.logger.e(e);
-            return null;
+        var files = (keepMainImage) ? data.sublist(1) : data;
+    
+        for (var file in files) {
+            file.clear();
         }
     }
 
@@ -473,7 +435,12 @@ class Post {
 
     List<Post> get children => _children;
 
-    bool get isVideo => (image.toLowerCase().contains(".mp4") || image.toLowerCase().contains(".webm") || image.toLowerCase().contains(".mkv"));
+    bool get isVideo => (
+        image.toLowerCase().endsWith(".mp4") || 
+        image.toLowerCase().endsWith(".webm") || 
+        image.toLowerCase().endsWith(".mkv") || 
+        image.toLowerCase().endsWith(".mov")
+    );
 
-    bool get isZip => (image.toLowerCase().contains(".zip"));
+    bool get isZip => (image.toLowerCase().endsWith(".zip"));
 }

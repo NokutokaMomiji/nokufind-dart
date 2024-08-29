@@ -4,6 +4,7 @@ import 'package:crypto/crypto.dart';
 import 'package:dio/dio.dart';
 import 'package:dio_http2_adapter/dio_http2_adapter.dart';
 import 'package:nokufind/src/Utils/pixiv_utils.dart';
+import 'package:nokufind/src/Utils/utils.dart';
 
 const String referer = "https://app-api.pixiv.net/";
 
@@ -37,6 +38,7 @@ class BasePixivAPI {
     BasePixivAPI({Map<String, dynamic>? requestsKwargs}) {
         additionalHeaders = CaseInsensitiveMap<String>(requestsKwargs?['headers']?.cast<String, String>());
         this.requestsKwargs = requestsKwargs ?? {};
+        addSmartRetry(_client);
     }
 
     void setAdditionalHeaders(Map<String, String> headers) {

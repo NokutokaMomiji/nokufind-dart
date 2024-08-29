@@ -15,8 +15,9 @@ class HitomiAPI {
 
     final Dio _client = Dio()..httpClientAdapter = Http2Adapter(ConnectionManager(idleTimeout: const Duration(seconds: 15)));
     static Common? _common;
+    bool preferWebp;
 
-    HitomiAPI() {
+    HitomiAPI({this.preferWebp = true}) {
         addSmartRetry(_client);
         configureCommon();
     }
@@ -65,7 +66,7 @@ class HitomiAPI {
             tagList.add("index-all.nozomi");
         }
 
-        Nokulog.logger.d(tagList);
+        Nokulog.d(tagList);
 
 
         var oldHeaders = Map<String, dynamic>.from(_client.options.headers);        
@@ -83,7 +84,7 @@ class HitomiAPI {
             _client.options.headers["Range"] += "$byteEnd";
         }
 
-        Nokulog.logger.d(_client.options.headers["Range"]);
+        Nokulog.d(_client.options.headers["Range"]);
 
         Executor tagExecutor = Executor(concurrency: 15);
 
@@ -95,14 +96,14 @@ class HitomiAPI {
             
             tagExecutor.scheduleTask(() async {
                 try {
-                    Nokulog.logger.d("Requesting $_url$tag");
+                    Nokulog.d("Requesting $_url$tag");
                     Response<Uint8List> response = await _client.get("$_url$tag");
 
-                    Nokulog.logger.d("Response: ${response.statusCode}");
+                    Nokulog.d("Response: ${response.statusCode}");
                     Uint8List? data = response.data;
 
                     if (data == null) {
-                        Nokulog.logger.e("Data for tag \"$tag\" was null.");
+                        Nokulog.e("Data for tag \"$tag\" was null.");
                         return null;
                     }
 
@@ -112,13 +113,14 @@ class HitomiAPI {
                         return null;
                     }
 
+                    var buffer = ByteData.sublistView(data);
                     for (int i = 0; i < totalItems; i++) {
-                        int value = data.buffer.asByteData().getInt32(i * 4);
+                        int value = buffer.getInt32(i * 4);
                         results[tag]!.add(value);
                     }
 
                 } catch (e, stackTrace) {
-                    Nokulog.logger.e("Failed to fetch \"$tag\".", error: e, stackTrace: stackTrace);
+                    Nokulog.e("Failed to fetch \"$tag\".", error: e, stackTrace: stackTrace);
                 }
             });
         }
@@ -137,7 +139,7 @@ class HitomiAPI {
             filteredPosts = filteredPosts.sublist(0, limit);
         }
 
-        Nokulog.logger.d("filteredPosts: ${filteredPosts.length}");
+        Nokulog.d("filteredPosts: ${filteredPosts.length}");
 
         if (filteredPosts.isEmpty) {
             return [];
@@ -161,14 +163,14 @@ class HitomiAPI {
         await executor.join(withWaiting: true);
         await executor.close();
 
-        Nokulog.logger.d("total posts: ${posts.length}");
+        Nokulog.d("total posts: ${posts.length}");
 
         return posts;
     }
 
     Future<Map<String, dynamic>?> getPost(int postID, {bool withGender = true}) async {
         if (postID <= 0) {
-            Nokulog.logger.e("Post ID cannot be a value lower or equal to 0. Value: $postID");
+            Nokulog.e("Post ID cannot be a value lower or equal to 0. Value: $postID");
             return null;
         }
 
@@ -181,15 +183,15 @@ class HitomiAPI {
             String? rawData = response.data;
             
             if (rawData == null || !rawData.contains("var galleryinfo = ")) {
-                Nokulog.logger.e("Either rawData is null or it doesn't contain valid info.");
+                Nokulog.e("Either rawData is null or it doesn't contain valid info.");
                 return null;
             }
 
             jsonData = jsonDecode(rawData.replaceAll("var galleryinfo = ", ""));
             List<HitomiFile> files = (jsonData["files"] as List<dynamic>).map((element) => HitomiFile.fromJson(postID, Map<String, dynamic>.from(element))).toList();
 
-            //Nokulog.logger.d(jsonEncode(jsonData));
-            //Nokulog.logger.d("======================================");
+            //Nokulog.d(jsonEncode(jsonData));
+            //Nokulog.d("======================================");
 
             String? videoUrl = jsonData["video"];
 
@@ -201,9 +203,9 @@ class HitomiAPI {
             List<String> hashes = [];
             List<List<int>> dimensions = [];
 
-            Nokulog.logger.d("Iterating through files");
             for (var file in files) {
-                images.add(_common!.urlFromUrlFromHash(postID.toString(), file, "webp", "", "a"));
+                //images.add(_common!.urlFromUrlFromHash(postID.toString(), file, "webp", "", "a"));
+                images.add(_common!.imageUrlFromImage(postID.toString(), file, preferWebp: preferWebp));
                 hashes.add(file.hash);
                 dimensions.add([file.width, file.height]);
             }
@@ -212,7 +214,6 @@ class HitomiAPI {
                 if (jsonData["language"] != null) "language:${jsonData["language"]}"
             ];
 
-            Nokulog.logger.d("Iterating through tags.");
             for (var tag in (jsonData["tags"] as List)) {
                 var currentTag = Map<String, dynamic>.from(tag);
                 
@@ -234,7 +235,6 @@ class HitomiAPI {
             
             List<String> artistNames = [];
             if (artists != null) {
-                Nokulog.logger.d("Iterating through artists.");
                 for (var artist in artists) {
                     tags.add("artist:${artist["artist"].replaceAll(" ", "_")}");
                     artistNames.add(artist["artist"].replaceAll(" ", "_"));
@@ -242,20 +242,17 @@ class HitomiAPI {
             }
 
             if (characters != null) {
-                Nokulog.logger.d("Iterating through characters.");
                 for (var character in characters) {
                     tags.add("character:${character["character"].replaceAll(" ", "_")}");
                 }
             }
 
             if (parodies != null) {
-                Nokulog.logger.d("Iterating through parodies.");
                 for (var parody in parodies) {
                     tags.add("series:${parody["parody"].replaceAll(" ", "_")}");
                 }
             }
 
-            Nokulog.logger.d("Constructing result.");
             Map<String, dynamic> result = {
                 "postID": (jsonData.containsKey("id") && jsonData["id"] != null) ? ((jsonData["id"] is String) ? int.tryParse(jsonData["id"]) : jsonData["id"]) : postID,
                 "title": jsonData["title"],
@@ -271,8 +268,8 @@ class HitomiAPI {
 
 
         } catch (e, stacktrace) {
-            Nokulog.logger.e("Failed to fetch post with ID $postID.", error: e, stackTrace: stacktrace);
-            Nokulog.logger.e(jsonEncode(jsonData), error: e, stackTrace: stacktrace);
+            Nokulog.e("Failed to fetch post with ID $postID.", error: e, stackTrace: stacktrace);
+            Nokulog.e(jsonEncode(jsonData), error: e, stackTrace: stacktrace);
             return null;
         }
     }
@@ -301,7 +298,7 @@ class HitomiAPI {
                 _common = Common(ggreq.data!);
                 return;
             } catch (e, stackTrace) {
-                Nokulog.logger.e("Failed to fetch gg.js.", error: e, stackTrace: stackTrace);
+                Nokulog.e("Failed to fetch gg.js.", error: e, stackTrace: stackTrace);
             }
         }
     }
