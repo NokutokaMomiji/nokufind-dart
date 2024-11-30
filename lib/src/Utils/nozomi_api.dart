@@ -68,7 +68,7 @@ class NozomiAPI {
             tagList.add(_indexUrl);
         }
 
-        Nokulog.logger.d(tagList);
+        Nokulog.d(tagList);
 
         var oldHeaders = Map<String, dynamic>.from(_client.options.headers);        
         _client.options.responseType = ResponseType.bytes;
@@ -85,7 +85,7 @@ class NozomiAPI {
             _client.options.headers["Range"] += "$byteEnd";
         }
 
-        Nokulog.logger.d(_client.options.headers["Range"]);
+        Nokulog.d(_client.options.headers["Range"]);
 
         Executor tagExecutor = Executor(concurrency: 15);
 
@@ -97,14 +97,14 @@ class NozomiAPI {
             
             tagExecutor.scheduleTask(() async {
                 try {
-                    Nokulog.logger.d("Requesting $tag");
+                    Nokulog.d("Requesting $tag");
                     Response<Uint8List> response = await _client.get(tag);
 
-                    Nokulog.logger.d("Response: ${response.statusCode}");
+                    Nokulog.d("Response: ${response.statusCode}");
                     Uint8List? data = response.data;
 
                     if (data == null) {
-                        Nokulog.logger.e("Data for tag \"$tag\" was null.");
+                        Nokulog.e("Data for tag \"$tag\" was null.");
                         return null;
                     }
 
@@ -114,13 +114,14 @@ class NozomiAPI {
                         return null;
                     }
 
+                    var buffer = ByteData.sublistView(data);
                     for (int i = 0; i < totalItems; i++) {
-                        int value = data.buffer.asByteData().getInt32(i * 4);
+                        int value = buffer.getInt32(i * 4);
                         results[tag]!.add(value);
                     }
 
                 } catch (e, stackTrace) {
-                    Nokulog.logger.e("Failed to fetch \"$tag\".", error: e, stackTrace: stackTrace);
+                    Nokulog.e("Failed to fetch \"$tag\".", error: e, stackTrace: stackTrace);
                 }
             });
         }
@@ -141,7 +142,7 @@ class NozomiAPI {
             filteredPosts = filteredPosts.sublist(0, limit);
         }
 
-        Nokulog.logger.d("filteredPosts: ${filteredPosts.length}");
+        Nokulog.d("filteredPosts: ${filteredPosts.length}");
 
         if (filteredPosts.isEmpty) {
             return [];
@@ -165,14 +166,14 @@ class NozomiAPI {
         await executor.join(withWaiting: true);
         await executor.close();
 
-        Nokulog.logger.d("total posts: ${posts.length}");
+        Nokulog.d("total posts: ${posts.length}");
 
         return posts;
     }
 
     Future<Map<String, dynamic>?> getPost(int postID, {bool withGender = true}) async {
         if (postID <= 0) {
-            Nokulog.logger.e("Post ID cannot be a value lower or equal to 0. Value: $postID");
+            Nokulog.e("Post ID cannot be a value lower or equal to 0. Value: $postID");
             return null;
         }
 
@@ -265,8 +266,8 @@ class NozomiAPI {
 
 
         } catch (e, stacktrace) {
-            Nokulog.logger.e("Failed to fetch post with ID $postID.", error: e, stackTrace: stacktrace);
-            Nokulog.logger.e(jsonEncode(jsonData), error: e, stackTrace: stacktrace);
+            Nokulog.e("Failed to fetch post with ID $postID.", error: e, stackTrace: stacktrace);
+            Nokulog.e(jsonEncode(jsonData), error: e, stackTrace: stacktrace);
             return null;
         }
     }

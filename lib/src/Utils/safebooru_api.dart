@@ -11,15 +11,15 @@ import "package:html_unescape/html_unescape_small.dart";
 
 import "../Utils/utils.dart";
 
-class Rule34API {
-    static const String _url = "https://api.rule34.xxx/";
-    static const String _siteUrl = "https://rule34.xxx/";
+class SafebooruApi {
+    static const String _url = "https://safebooru.org/";
+    static const String _siteUrl = "https://safebooru.org/";
     static final HtmlUnescape _unescape = HtmlUnescape();
 
     final Dio _client = Dio()..httpClientAdapter = Http2Adapter(ConnectionManager(idleTimeout: const Duration(seconds: 15)));
     final _dateFormat = DateFormat("yyyy-MM-dd HH:mm:ss");
 
-    Rule34API() {
+    SafebooruApi() {
         addSmartRetry(_client);
     }
 
@@ -48,13 +48,14 @@ class Rule34API {
                 results[i] = Map<String, dynamic>.from(results[i]);
 
                 executor.scheduleTask(() async {
-                    var tags = (_unescape.convert(results[i]["tags"] as String)).split(" ");
-                    var source = (results[i]["source"] as String);
-                    var sources = (source.isNotEmpty) ? source.split(" ") : <String>[]; 
+                    final List<String> tags = (_unescape.convert(results[i]["tags"] as String)).split(" ");
+                    final String directory = results[i]["directory"];
+                    final String image = results[i]["image"];
+                    final String imageFilename = image.substring(0, image.lastIndexOf("."));
 
+                    results[i]["file_url"] = "${_url}images/$directory/$image";
+                    results[i]["preview_url"] = "${_url}thumbnails/$directory/thumbnail_$imageFilename.jpg";
                     results[i]["tags"] = tags;
-                    results[i]["sources"] = sources;
-                    results[i]["authors"] = <String>[]; //(source.isNotEmpty) ? getPotentialAuthors(tags, sources) : <String>[];
                 });
             }
 
@@ -83,12 +84,14 @@ class Rule34API {
                 results[i] = Map<String, dynamic>.from(results[i]);
 
                 var tags = (_unescape.convert(results[i]["tags"] as String)).split(" ");
-                var source = (results[i]["source"] as String);
-                var sources = (source.isNotEmpty) ? source.split(" ") : <String>[];
+                final String directory = results[i]["directory"];
+                final String image = results[i]["image"];
+                final String imageFilename = image.substring(0, image.lastIndexOf("."));
+
+                results[i]["file_url"] = "${_url}images/$directory/$image";
+                results[i]["preview_url"] = "${_url}thumbnails/$directory/thumbnail_$imageFilename.jpg";
 
                 results[i]["tags"] = tags;
-                results[i]["sources"] = sources;
-                results[i]["authors"] = [];
 
                 return results[i];
             }
@@ -212,7 +215,7 @@ class Rule34API {
             Element tcontent = otherDoc.querySelector("tbody") as Element;
             for (var note in rawNotes.indexed) {        
                 try {
-                    int index = (note.$1 + 1).clamp(0, tcontent.children.length - 1);
+                    int index = (note.$1 + 1).clamp(tcontent.children.length - 1, tcontent.children.length - 1);
                     List<Element> tableData = tcontent.children[index].children;
                     note.$2["id"] = int.parse(tableData[2].children[0].text.trim());
                     note.$2["body"] = tableData[3].innerHtml.trim().replaceAll(antigraph, "\n");
@@ -238,7 +241,7 @@ class Rule34API {
         
         Response<String> response = await _client.get(requestURL.toString());
         
-        if (response.data == null) {
+        if (response.data == null || response.data?.isEmpty == true) {
             throw DioException(
                 stackTrace: StackTrace.current,
                 type: DioExceptionType.badResponse,

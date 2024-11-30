@@ -2,8 +2,11 @@
 
 import "dart:math";
 
+import "package:async/async.dart";
+
 import "subfinder.dart";
 import "../Utils/rule34_api.dart";
+import "../Utils/utils.dart";
 import "../post.dart";
 import "../comment.dart";
 import "../note.dart";
@@ -65,6 +68,7 @@ class Rule34Finder implements ISubfinder {
 
     final Rule34API _client;
     final _config = SubfinderConfiguration();
+    final List<CancelableCompleter> _completers = [];
 
     Rule34Finder() : _client = Rule34API();
 
@@ -73,7 +77,19 @@ class Rule34Finder implements ISubfinder {
         page = (page == null) ? 0 : page - 1;
         page = (page < 0) ? 0 : page;
 
-        return await _getAllPosts(tags, limit: limit, page: page);
+        CancelableCompleter<List<Post>> completer = CancelableCompleter(
+            onCancel: () {
+                Nokulog.w("Search for \"$tags\" was cancelled.");
+            }
+        );
+
+        var searchFuture = _getAllPosts(tags, completer, limit: limit, page: page);
+
+        _completers.add(completer);
+
+        completer.complete(searchFuture);
+
+        return completer.operation.value;
     }
 
     @override
@@ -126,7 +142,17 @@ class Rule34Finder implements ISubfinder {
         return post.setChildren((await searchPosts("parent:${post.postID}")).where((element) => element.postID != post.postID).toList());
     }
 
-    Future<List<Post>> _getAllPosts(String tags, {int limit = 1000, int? page}) async {
+    @override
+    Future<void> cancelLastSearch() async {
+        if (_completers.isEmpty) return;
+
+        var lastCompleter = _completers.removeLast();
+        lastCompleter.operation.cancel();
+    }
+
+    Future<List<Post>> _getAllPosts(String tags, CancelableCompleter completer, {int limit = 1000, int? page}) async {
+        if (completer.isCanceled) return [];
+
         page = (page == null) ? 0 : page;
 
         List<Post> currentPosts = [];
@@ -136,7 +162,11 @@ class Rule34Finder implements ISubfinder {
         int currentPage = page;
 
         while (currentSize == checkSize) {
+            if (completer.isCanceled) return [];
+
             var rawPosts = await _client.searchPosts(tags, limit: checkSize, page: currentPage);
+
+            if (completer.isCanceled) return [];
 
             currentSize = rawPosts.length;
 

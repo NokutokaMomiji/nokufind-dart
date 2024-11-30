@@ -2,8 +2,11 @@
 
 import "dart:math";
 
+import "package:async/async.dart";
+
 import "subfinder.dart";
 import "../Utils/yandere_api.dart";
+import "../Utils/utils.dart";
 import "../post.dart";
 import "../comment.dart";
 import "../note.dart";
@@ -76,6 +79,7 @@ class YandereFinder implements ISubfinder {
 
     final YandereAPI _client = YandereAPI();
     final _config = SubfinderConfiguration();
+    final List<CancelableCompleter> _completers = [];
 
     YandereFinder() {
         _config.setProperty("use_lower_quality", false);
@@ -85,7 +89,19 @@ class YandereFinder implements ISubfinder {
     Future<List<Post>> searchPosts(String tags, {int limit = 100, int? page}) async {
         page = (page == null) ? 1 : page;
 
-        return await _getAllPosts(tags, limit: limit, page: page);
+        CancelableCompleter<List<Post>> completer = CancelableCompleter(
+            onCancel: () {
+                Nokulog.w("Search for \"$tags\" was cancelled.");
+            }
+        );
+
+        var searchFuture = _getAllPosts(tags, completer, limit: limit, page: page);
+
+        _completers.add(completer);
+
+        completer.complete(searchFuture);
+
+        return completer.operation.value;
     }
 
     @override
@@ -144,7 +160,17 @@ class YandereFinder implements ISubfinder {
         return post.setChildren((await searchPosts("parent:${post.postID}")).where((element) => element.postID != post.postID).toList());
     }
 
-    Future<List<Post>> _getAllPosts(String tags, {int limit = 100, int? page}) async {
+    @override
+    Future<void> cancelLastSearch() async {
+        if (_completers.isEmpty) return;
+
+        var lastCompleter = _completers.removeLast();
+        lastCompleter.operation.cancel();
+    }
+
+    Future<List<Post>> _getAllPosts(String tags, CancelableCompleter completer, {int limit = 100, int? page}) async {
+        if (completer.isCanceled) return [];
+
         page = (page == null) ? 1 : page;
 
         List<Post> currentPosts = [];
@@ -156,7 +182,11 @@ class YandereFinder implements ISubfinder {
         bool useLowerQuality = (_config.getConfig<bool>("use_lower_quality", defaultValue: false) == true);
 
         while (currentSize == checkSize) {
+            if (completer.isCanceled) return [];
+
             var rawPosts = await _client.searchPosts(tags, limit: checkSize, page: currentPage);
+
+            if (completer.isCanceled) return [];
 
             currentSize = rawPosts.length;
 

@@ -1,5 +1,7 @@
 
 
+import "package:async/async.dart";
+
 import "subfinder.dart";
 import "../Utils/nozomi_api.dart";
 import "../post.dart";
@@ -17,7 +19,7 @@ class NozomiFinder implements ISubfinder {
             source: "nozomi", 
             preview: postData["preview"], 
             md5: postData["hashes"],
-            rating: null, 
+            rating: (postData["tags"].contains("R-18") || postData["tags"].contains("R-18G")) ? Rating.explicit : null, 
             parentID: null, 
             dimensions: postData["dimensions"], 
             poster: "Unknown",
@@ -36,6 +38,7 @@ class NozomiFinder implements ISubfinder {
 
     final NozomiAPI _client = NozomiAPI();
     final _config = SubfinderConfiguration();
+    final List<CancelableCompleter> _completers = [];
 
 
     @override
@@ -79,6 +82,14 @@ class NozomiFinder implements ISubfinder {
     @override
     Future<List<Post>> postGetChildren(Post post) async {
         return [];
+    }
+
+    @override
+    Future<void> cancelLastSearch() async {
+        if (_completers.isEmpty) return;
+
+        var lastCompleter = _completers.removeLast();
+        lastCompleter.operation.cancel();
     }
     
     @override

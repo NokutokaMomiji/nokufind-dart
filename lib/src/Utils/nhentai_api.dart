@@ -60,7 +60,7 @@ class NHentaiAPI {
                 String paramString = mapToPairedString(params);
                 Uri url = Uri.parse("$requestPart?$paramString");
 
-                Nokulog.logger.d(url);
+                Nokulog.d(url);
                 
                 Response<String> response = await _client.get(url.toString());
 
@@ -69,19 +69,19 @@ class NHentaiAPI {
                 Element? searchResultsContainer = document.querySelector("div .container");
 
                 if (searchResultsContainer == null) {
-                    Nokulog.logger.e("No search results container found.");
+                    Nokulog.e("No search results container found.");
                     return rawPosts;
                 }
                 
                 List<Element> searchResults = document.querySelectorAll("div .gallery");
 
                 if (searchResults.isEmpty) {
-                    Nokulog.logger.e("No search results.");
+                    Nokulog.e("No search results.");
                     return rawPosts;
                 }
                 List<int> postIDs = [];
 
-                Nokulog.logger.d("Found ${searchResults.length} results.");
+                Nokulog.d("Found ${searchResults.length} results.");
 
                 for (var searchResult in searchResults) {
                     Document results = Document.html(searchResult.outerHtml);
@@ -90,8 +90,8 @@ class NHentaiAPI {
                         continue;
                     }
                 
-                    //Nokulog.logger.d(tagResults.outerHtml);
-                    //Nokulog.logger.d(tagResults.attributes["href"]);
+                    //Nokulog.d(tagResults.outerHtml);
+                    //Nokulog.d(tagResults.attributes["href"]);
                     String? tempID = tagResults.attributes["href"]?.split("/")[2];
                 
                     if (tempID == null) {
@@ -127,18 +127,18 @@ class NHentaiAPI {
 
             return rawPosts;
         } catch (e, stackTrace) {
-            Nokulog.logger.d("Failed to fetch posts matching \"$tags\".", error: e, stackTrace: stackTrace);
+            Nokulog.d("Failed to fetch posts matching \"$tags\".", error: e, stackTrace: stackTrace);
             return rawPosts;
         }
     }
 
     Future<Map<String, dynamic>?> getPost(int postID) async {
         try {
-            //Nokulog.logger.d("Getting post with id $postID");
+            //Nokulog.d("Getting post with id $postID");
             Map<String, dynamic> result = await _makeRequest("${_url}gallery/$postID") as Map<String, dynamic>;
 
             if (result.containsKey("error")) {
-                Nokulog.logger.e("NHentai result: $result");
+                Nokulog.e("NHentai result: $result");
                 return null;
             }
 
@@ -180,7 +180,7 @@ class NHentaiAPI {
 
             return myResult;
         } catch(e, stackTrace) {
-            Nokulog.logger.e("Failed to fetch post with ID $postID.", error: e, stackTrace: stackTrace);
+            Nokulog.e("Failed to fetch post with ID $postID.", error: e, stackTrace: stackTrace);
             return null;
         }
     }
@@ -191,9 +191,9 @@ class NHentaiAPI {
         if (postID == null) {
             try {
                 Response<String> response = await _client.get(_randomUrl);
-                Nokulog.logger.d(response.redirects.map((e) => e.toString()));
+                Nokulog.d(response.redirects.map((e) => e.toString()));
             } catch(e, stackTrace) {
-                Nokulog.logger.e("Failed to fetch random post.", error: e, stackTrace: stackTrace);
+                Nokulog.e("Failed to fetch random post.", error: e, stackTrace: stackTrace);
                 return [];
             }
         }
@@ -204,8 +204,9 @@ class NHentaiAPI {
         
         try {
             List<dynamic> comments = await _makeRequest("${_url}gallery/$postID/comments");
-
+            
             for (var comment in comments) {
+                print(comment["post_date"]);
                 rawComments.add({
                     "id": comment["id"],
                     "post_id": postID,
@@ -213,13 +214,13 @@ class NHentaiAPI {
                     "creator": comment["poster"]["username"],
                     "creator_avatar": "$_avatarUrl${comment['poster']['avatar_url']}",
                     "body": comment["body"],
-                    "created_at": DateTime.fromMillisecondsSinceEpoch(comment["post_date"])
+                    "created_at": DateTime.fromMillisecondsSinceEpoch(comment["post_date"] * 1000)
                 });
             }
 
             return rawComments;
         } catch (e, stackTrace) {
-            Nokulog.logger.e("Failed to fetch comments for post ID $postID.", error: e, stackTrace: stackTrace);
+            Nokulog.e("Failed to fetch comments for post ID $postID.", error: e, stackTrace: stackTrace);
             return rawComments;
         }
     }
@@ -234,10 +235,10 @@ class NHentaiAPI {
         try {
             return rawComments.firstWhere((element) => element["id"] == commentID);
         } on StateError catch (e, stackTrace) {
-            Nokulog.logger.e("No comment with ID $commentID for post $postID exists.", error: e, stackTrace: stackTrace);
+            Nokulog.e("No comment with ID $commentID for post $postID exists.", error: e, stackTrace: stackTrace);
             return null;
         } catch(e, stackTrace) {
-            Nokulog.logger.e("Unexpected exception when fetching comment.", error: e, stackTrace: stackTrace);
+            Nokulog.e("Unexpected exception when fetching comment.", error: e, stackTrace: stackTrace);
             return null;
         }
     }

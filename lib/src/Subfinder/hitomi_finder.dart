@@ -1,5 +1,7 @@
 
 
+import "package:async/async.dart";
+
 import "subfinder.dart";
 import "../Utils/hitomi_api.dart";
 import "../post.dart";
@@ -34,9 +36,11 @@ class HitomiFinder implements ISubfinder {
         throw Exception("Hitomi has no concept of notes. Do not use \"toNote\".");
     }
 
-    final HitomiAPI _client = HitomiAPI();
+    final HitomiAPI _client;
     final _config = SubfinderConfiguration();
+    final List<CancelableCompleter> _completers = [];
 
+    HitomiFinder({bool preferWebp = true}) : _client = HitomiAPI(preferWebp: preferWebp);
 
     @override
     Future<List<Post>> searchPosts(String tags, {int limit = 100, int? page}) async {
@@ -84,7 +88,20 @@ class HitomiFinder implements ISubfinder {
     Future<List<Post>> postGetChildren(Post post) async {
         return [];
     }
+
+    @override
+    Future<void> cancelLastSearch() async {
+        if (_completers.isEmpty) return;
+
+        var lastCompleter = _completers.removeLast();
+        lastCompleter.operation.cancel();
+    }
     
+    bool get preferWebp => _client.preferWebp;
+    set preferWebp(bool value) {
+        _client.preferWebp = value;
+    }
+
     @override
     SubfinderConfiguration get configuration => _config;
 }

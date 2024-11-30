@@ -1,5 +1,6 @@
 import "dart:math";
 
+import "package:async/async.dart";
 import 'package:trotter/trotter.dart';
 
 import "subfinder.dart";
@@ -20,12 +21,15 @@ List<Map<String, dynamic>> _filterInvalidComments(List<Map<String, dynamic>> com
 
 class DanbooruFinder implements ISubfinder {
     static Post toPost(Map<String, dynamic> postData) {
+        String artistString = postData["tag_string_artist"] as String;
+	    String sourceString = postData["source"] as String;
+
         return Post(
             postID: postData["id"], 
             tags: (postData["tag_string"] as String).split(" "), 
-            sources: (postData["source"] as String).split(" "), 
+            sources: (sourceString.isEmpty) ? [] : sourceString.split(" "), 
             images: [postData["file_url"]], 
-            authors: (postData["tag_string_artist"] as String).split(" "), 
+            authors: (artistString.isEmpty) ? [] : artistString.split(" "), 
             source: "danbooru", 
             preview: postData["preview_file_url"], 
             md5: [postData["md5"]], 
@@ -66,12 +70,25 @@ class DanbooruFinder implements ISubfinder {
 
     final DanbooruAPI _client = DanbooruAPI();
     final _config = SubfinderConfiguration();
+    final List<CancelableCompleter> _completers = [];
 
     @override
-    Future<List<Post>> searchPosts(String tags, {int limit = 100, int? page}) async {
+    Future<List<Post>> searchPosts(String tags, {int limit = 200, int? page}) async {
         page = (page == null) ? 1 : page;
+        
+        CancelableCompleter<List<Post>> completer = CancelableCompleter(
+            onCancel: () {
+                Nokulog.w("Search for \"$tags\" was cancelled.");
+            }
+        );
 
-        return await _getMultipleTags(tags, limit: limit, page: page);
+        var searchFuture = _getMultipleTags(tags, completer, limit: limit, page: page);
+
+        _completers.add(completer);
+
+        completer.complete(searchFuture);
+
+        return completer.operation.value;
     }
 
     @override
@@ -130,14 +147,26 @@ class DanbooruFinder implements ISubfinder {
         return post.setChildren((await searchPosts("parent:${post.postID}")).where((element) => element.postID != post.postID).toList());
     }
 
-    Future<List<Post>> _getMultipleTags(String tags, {int limit = 200, int? page}) async {
+    @override
+    Future<void> cancelLastSearch() async {
+        if (_completers.isEmpty) return;
+
+        var lastCompleter = _completers.removeLast();
+        lastCompleter.operation.cancel();
+    }
+
+    Future<List<Post>> _getMultipleTags(String tags, CancelableCompleter completer, {int limit = 200, int? page}) async {
+        // First order of business it to check whether the operation has been cancelled.
+        // If it has, no need to keep on doing stuff.
+        if (completer.isCanceled) return [];
+
         // We parse the tags to turn them into a list that doesn't break quoted tags.
         // Example: hello "there people" -> ["hello", "there people"].
         List<String> parsedTags = parseTags(tags);
         
         // Danbooru's tag limit is 2. If the number of tags is 2 or less, there is no need to do all this convoluted stuff.
         if (parsedTags.length <= 2) {
-            return _getAllPosts(tags, limit: limit, page: page);
+            return _getAllPosts(tags, completer, limit: limit, page: page);
         }
 
         List<Post> totalPosts = [];
@@ -153,18 +182,20 @@ class DanbooruFinder implements ISubfinder {
                 String? nextTags = get(parsedTags, i + 1);
             
                 if (prevTags != null) {
-                    s1 = await _getMultipleTags(trim(prevTags, "()"), limit: limit, page: page);
+                    s1 = await _getMultipleTags(trim(prevTags, "()"), completer, limit: limit, page: page);
+                    if (completer.isCanceled) return [];
                 }
 
                 if (nextTags != null) {
-                    s2 = await _getMultipleTags(trim(nextTags, "()"), limit: limit, page: page);
+                    s2 = await _getMultipleTags(trim(nextTags, "()"), completer, limit: limit, page: page);
+                    if (completer.isCanceled) return [];
                 }
 
                 return [...s1, ...s2];
             } else if (currentTag.contains("or")) {
                 String? nextTags = get(parsedTags, i + 1);
                 if (nextTags != null) {
-                    return await _getMultipleTags(trim(nextTags, "()"), limit: limit, page: page);
+                    return await _getMultipleTags(trim(nextTags, "()"), completer, limit: limit, page: page);
                 }
             }
         }
@@ -181,7 +212,7 @@ class DanbooruFinder implements ISubfinder {
         } else {
             // We have an uneven amount of tags, so we create the least amount of combinations for pairs of two.
             totalCombinations = Combinations(2, parsedTags)().map((e) => e.join(" ")).toList();
-            Nokulog.logger.d("total combinations: $totalCombinations");
+            Nokulog.d("total combinations: $totalCombinations");
         }
 
         int startPage = page ?? 1;
@@ -189,9 +220,9 @@ class DanbooruFinder implements ISubfinder {
 
         while (totalPosts.length < limit) {
             for (String combination in totalCombinations) {
-                Nokulog.logger.d(combination);
+                Nokulog.d(combination);
 
-                postFutures.add(_getAllPosts(combination, limit: limit, page: startPage));
+                postFutures.add(_getAllPosts(combination, completer, limit: limit, page: startPage));
             }
 
             var postResults = await Future.wait(postFutures);
@@ -230,7 +261,9 @@ class DanbooruFinder implements ISubfinder {
         return filteredPosts;
     }
 
-    Future<List<Post>> _getAllPosts(String tags, {int limit = 200, int? page}) async {
+    Future<List<Post>> _getAllPosts(String tags, CancelableCompleter completer, {int limit = 200, int? page}) async {
+        if (completer.isCanceled) return [];
+
         page = (page == null) ? 1 : page;
 
         List<Post> currentPosts = [];
@@ -241,15 +274,17 @@ class DanbooruFinder implements ISubfinder {
 
         while (currentSize == checkSize) {
             var rawPosts = await _client.searchPosts(tags, limit: checkSize, page: currentPage);
-            Nokulog.logger.d("[nokufind.DanbooruFinder]: Found ${rawPosts.length}.");
+            if (completer.isCanceled) return [];
+
+            Nokulog.d("[nokufind.DanbooruFinder]: Found ${rawPosts.length}.");
 
             currentSize = rawPosts.length;
 
             rawPosts = _filterInvalidPosts(rawPosts);
-            Nokulog.logger.d("[nokufind.DanbooruFinder]: After filtering, ${rawPosts.length} remained.");
+            Nokulog.d("[nokufind.DanbooruFinder]: After filtering, ${rawPosts.length} remained.");
             currentPosts.addAll(rawPosts.map(toPost));
 
-            Nokulog.logger.d("[nokufind.DanbooruFinder]: Currently at ${currentPosts.length} posts.");
+            Nokulog.d("[nokufind.DanbooruFinder]: Currently at ${currentPosts.length} posts.");
 
             if (currentPosts.length >= limit) {
                 break;
