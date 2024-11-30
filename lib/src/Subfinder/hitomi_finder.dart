@@ -40,7 +40,7 @@ class HitomiFinder implements ISubfinder {
     final _config = SubfinderConfiguration();
     final List<CancelableCompleter> _completers = [];
 
-    HitomiFinder({bool preferWebp = false}) : _client = HitomiAPI(preferWebp: preferWebp);
+    HitomiFinder({bool preferWebp = true}) : _client = HitomiAPI(preferWebp: preferWebp);
 
     @override
     Future<List<Post>> searchPosts(String tags, {int limit = 100, int? page}) async {

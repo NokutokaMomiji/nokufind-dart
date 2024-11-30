@@ -43,7 +43,7 @@ class GelbooruAPI {
             var contentMap = await _makeRequest("index.php", params: params) as Map<String, dynamic>;
             
             if (!contentMap.containsKey("post")) {
-                Nokulog.d("Error: Didn't find key with name post for index.php?${mapToPairedString(params)}.");
+                Nokulog.e("Didn't find key with name post for index.php?${mapToPairedString(params)}.");
                 return [];
             }
             

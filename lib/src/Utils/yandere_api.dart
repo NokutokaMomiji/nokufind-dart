@@ -31,7 +31,9 @@ class YandereAPI {
             List<dynamic> results = await _makeRequest("post.json", params: params) as List<dynamic>;
             
             for (int i = 0; i < results.length; i++) {
-                results[i] = Map<String, dynamic>.from(results[i]);
+                var map = Map<String, dynamic>.from(results[i]);
+                map["rating"] = (map["rating"] == "s") ? "general" : map["rating"];
+                results[i] = map;
             }
 
             return List<Map<String, dynamic>>.from(results);

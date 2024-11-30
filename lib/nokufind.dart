@@ -21,4 +21,4 @@ export 'src/Subfinder/nozomi_finder.dart';
 export 'src/Subfinder/pixiv_finder.dart';
 
 export 'src/Utils/download_stream.dart';
-export 'src/Utils/streamed_file.dart';
+export 'src/Utils/post_file.dart';

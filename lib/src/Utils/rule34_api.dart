@@ -88,7 +88,7 @@ class Rule34API {
 
                 results[i]["tags"] = tags;
                 results[i]["sources"] = sources;
-                results[i]["authors"] = (source.isNotEmpty) ? getPotentialAuthors(tags, sources) : <String>[];
+                results[i]["authors"] = [];
 
                 return results[i];
             }

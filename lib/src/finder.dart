@@ -20,10 +20,11 @@ import 'Utils/utils.dart';
 
 class NoSuchSubfinderException implements Exception {
     String cause;
-    NoSuchSubfinderException(this.cause);
+    Iterable<String> names;
+    NoSuchSubfinderException(this.cause, this.names);
 
     @override
-    String toString() => cause;
+    String toString() => "No Subfinder with name \"$cause\" found. Valid Subfinders are: ${names.join(', ')}";
 }
 
 class DisabledSubfinderException implements Exception {
@@ -31,7 +32,7 @@ class DisabledSubfinderException implements Exception {
     DisabledSubfinderException(this.cause);
 
     @override
-    String toString() => cause;
+    String toString() => "The specified subfinder \"$cause\" is disabled.";
 }
 
 class Finder {
@@ -130,8 +131,6 @@ class Finder {
             await cancelSearch();
         }
 
-        var aliases = configuration.getConfig("aliases") as Map;
-
         if (client != null) {
             _checkSubfinderExists(client);
 
@@ -141,12 +140,7 @@ class Finder {
                 throw DisabledSubfinderException("Subfinder \"$client\" was selected but is disabled.");
             }
 
-            var clientAliases = Map<String, String>.from(aliases[client]);
-            String resultTags = tags;
-
-            clientAliases.forEach((key, value) {
-                resultTags = resultTags.replaceAll(key, value);
-            });
+            var resultTags = _replaceAliases(tags, client);
 
             var posts = await (_clients[client] as ISubfinder).searchPosts(resultTags, limit: limit, page: page);
             
@@ -186,7 +180,6 @@ class Finder {
         if (completer.isCanceled) return [];
 
         List<Post> allPosts = [];
-        var aliases = configuration.getConfig("aliases") as Map;
 
         for (var client in _clients.entries) {
             if (completer.isCanceled) return [];
@@ -204,13 +197,8 @@ class Finder {
 
                     var clientName = client.key;
                     var clientSubfinder = client.value;
-                    var clientAliases = aliases[clientName] as Map;
-
-                    var resultTags = tags;
-
-                    clientAliases.forEach((key, value) {
-                        resultTags = resultTags.replaceAll(key, value);
-                    });
+                    
+                    var resultTags = _replaceAliases(tags, clientName);
 
                     try {
                         var posts = await clientSubfinder.searchPosts(resultTags, limit: limit, page: page);
@@ -237,6 +225,34 @@ class Finder {
         if (completer.isCanceled) return [];
 
         return allPosts;
+    }
+
+    String _replaceAliases(String tags, String client) {
+        final aliases = configuration.getConfig("aliases") as Map;
+        final clientAliases = Map<String, String>.from(aliases[client]);
+
+        //print(clientAliases);
+
+        List<String> splitTags = parseTagsWithQuotes(tags, includeQuotes: true);
+
+        //Nokulog.d("Before ($client): $splitTags");
+
+        for (int i = 0; i < splitTags.length; i++) {
+            final String current = splitTags[i];
+
+            final bool hasQuotes = (current.startsWith('"') || current.endsWith('"'));
+            final String tag = trim(current, '"');
+
+            //print("tag ($client): $tag");
+            if (clientAliases.containsKey(tag)) {
+                var alias = clientAliases[tag]!;
+                splitTags[i] = (hasQuotes) ? "\"$alias\"" : alias;
+            }
+        }
+
+        //okulog.d("After ($client): $splitTags");
+
+        return splitTags.join(" ");
     }
 
     Future<void> cancelSearch() async {
@@ -378,7 +394,6 @@ class Finder {
         for (var post in posts) {
             executor.scheduleTask(() async {
                 try {
-                    
                     Nokulog.d("Fetching ${post.identifier}...");
                     await post.fetchData(onlyMainImage: onlyMainImage);
                 } catch (e) {
@@ -439,7 +454,7 @@ class Finder {
 
     void _checkSubfinderExists(String name) {
         if (!_clients.containsKey(name)) {
-            throw NoSuchSubfinderException(name);
+            throw NoSuchSubfinderException(name, _clients.keys);
         }
     }
 

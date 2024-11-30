@@ -217,7 +217,7 @@ List<String> parseTags(String tags) {
     return tagList;
 }
 
-List<String> parseTagsWithQuotes(String tags) {
+List<String> parseTagsWithQuotes(String tags, {bool includeQuotes = false}) {
     String currentText = "";
     List<String> tagList = [];
     bool inQuotations = false;
@@ -232,7 +232,7 @@ List<String> parseTagsWithQuotes(String tags) {
 
         if (char == '"') {
             inQuotations = !inQuotations;
-            continue;
+            if (!includeQuotes) continue;
         }
 
         currentText += char;
@@ -263,7 +263,7 @@ String trimLeft(String text, String? chars) {
         start += 1;
     }
 
-    return text.substring(start);
+    return text.substring(start - 1);
 }
 
 String trimRight(String text, String? chars) {
@@ -312,68 +312,4 @@ void addSmartRetry(Dio dio) {
             ]
         )
     );
-}
-
-List<String> splitIntoPieces(String string) {
-    string = string.toLowerCase().replaceAll(')', '').replaceAll('https://', '').replaceAll('//', '/').replaceAll('_', '');
-
-    final List<String> parts = [];
-    String current = "";
-
-    for (int i = 0; i < string.length; i++) {
-        var char = string[i];
-
-        if (char == '(' || char == '/') {
-            if (current.isEmpty) continue;
-
-            if (current.startsWith("@")) {
-                parts.insert(0, current.substring(1, current.length));
-                current = "";
-                continue;
-            }
-
-            parts.add(current);
-            current = "";
-            continue;
-        }
-
-        current += char;
-    }
-
-    if (current.isNotEmpty) {
-        parts.add(current);
-    }
-
-    return parts;
-}
-
-String? checkForPotentialAuthor(String tag, String url) {
-    final List<String> tagParts = splitIntoPieces(tag);
-    final List<String> urlParts = splitIntoPieces(url);
-
-    for (var tagPart in tagParts) {
-        for (var urlPart in urlParts) {
-            if (tagPart == urlPart) return tagPart;
-        }
-    }
-
-    return null;
-}
-
-List<String> getPotentialAuthors(List<String> tags, List<String> sources) {
-    if (tags.isEmpty || sources.isEmpty) {
-        return const [];
-    }
-
-    final List<String> authors = [];
-
-    for (var tag in tags) {
-        for (var source in sources) {
-            var check = checkForPotentialAuthor(tag, source);
-            if (check == null) continue;
-            authors.add(check);
-        }
-    }
-
-    return authors;
 }
