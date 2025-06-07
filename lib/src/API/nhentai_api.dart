@@ -17,22 +17,26 @@ enum ImageType {
 class NHentaiAPI {
     static const String _url = "https://nhentai.net/api/";
     static const String _siteUrl = "https://nhentai.net/";
-    static const String _imageUrl = "https://i.nhentai.net/galleries/";
+    static const String _imageUrl = "https://i1.nhentai.net/galleries/";
     static const String _avatarUrl = "https://i5.nhentai.net/";
-    static const String _tinyImageUrl = "https://t.nhentai.net/galleries/";
+    static const String _tinyImageUrl = "https://t1.nhentai.net/galleries/";
     static const String _randomUrl = "https://nhentai.net/random/";
-    static const String _userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36 OPR/109.0.0.0";
+    static const String _userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 OPR/116.0.0.0";
 
     final Dio _client = Dio()..httpClientAdapter = Http2Adapter(ConnectionManager(idleTimeout: const Duration(seconds: 15)));
     //final _dateFormat = DateFormat("yyyy-MM-dd HH:mm:ss");
     
-    final String _cfClearance;
+    final String cfClearance;
+    final String csrfToken;
+    final String sessionAffinity;
 
     Map<String, String> defaultHeaders = {};
 
-    NHentaiAPI(this._cfClearance) {
+    NHentaiAPI(this.cfClearance, this.csrfToken, this.sessionAffinity) {
         defaultHeaders["User-Agent"] = _userAgent;
-        defaultHeaders["Cookie"] = "cf_clearance=$_cfClearance;";
+        defaultHeaders["Accept"] = "*/*";
+        defaultHeaders["Connection"] = "keep-alive";
+        defaultHeaders["Cookie"] = "cf_clearance=$cfClearance; csrftoken=$csrfToken; session-affinity=$sessionAffinity";
         _client.options.headers = defaultHeaders;
         addSmartRetry(_client);
     }
@@ -41,7 +45,7 @@ class NHentaiAPI {
         if (page <= 0) page = 1;
         if (limit <= 0) limit = 25;
         
-        Map<String, String> params = {
+        final Map<String, String> params = {
             "page": page.toString(),
         };
 
@@ -50,49 +54,49 @@ class NHentaiAPI {
         }
 
         int innerPage = page;
-        List<Map<String, dynamic>> rawPosts = [];
-        String requestPart = (tags.isEmpty) ? _siteUrl : "${_siteUrl}search/";
-
+        final List<Map<String, dynamic>> rawPosts = [];
+        final String requestPart = (tags.isEmpty) ? _siteUrl : "${_siteUrl}search/";
+        Response<String> response;
         try {
             while (rawPosts.length < limit) {
                 params["page"] = innerPage.toString();
 
-                String paramString = mapToPairedString(params);
-                Uri url = Uri.parse("$requestPart?$paramString");
+                final String paramString = mapToPairedString(params);
+                final Uri url = Uri.parse("$requestPart?$paramString");
 
                 Nokulog.d(url);
                 
-                Response<String> response = await _client.get(url.toString());
+                response = await _client.get(url.toString());
 
-                Document document = Document.html(response.data!);
+                final Document document = Document.html(response.data!);
 
-                Element? searchResultsContainer = document.querySelector("div .container");
+                //Element? searchResultsContainer = document.querySelector("div .container");
 
-                if (searchResultsContainer == null) {
-                    Nokulog.e("No search results container found.");
-                    return rawPosts;
-                }
+                //if (searchResultsContainer == null) {
+                //    Nokulog.e("No search results container found.");
+                //    return rawPosts;
+                //}
                 
-                List<Element> searchResults = document.querySelectorAll("div .gallery");
+                final List<Element> searchResults = document.getElementsByClassName("gallery");
 
                 if (searchResults.isEmpty) {
                     Nokulog.e("No search results.");
                     return rawPosts;
                 }
-                List<int> postIDs = [];
+                final List<int> postIDs = [];
 
                 Nokulog.d("Found ${searchResults.length} results.");
 
-                for (var searchResult in searchResults) {
-                    Document results = Document.html(searchResult.outerHtml);
-                    var tagResults = results.querySelector("a.cover");
+                for (final searchResult in searchResults) {
+                    final Document results = Document.html(searchResult.outerHtml);
+                    final tagResults = results.querySelector("a.cover");
                     if (tagResults == null) {
                         continue;
                     }
                 
                     //Nokulog.d(tagResults.outerHtml);
                     //Nokulog.d(tagResults.attributes["href"]);
-                    String? tempID = tagResults.attributes["href"]?.split("/")[2];
+                    final String? tempID = tagResults.attributes["href"]?.split("/")[2];
                 
                     if (tempID == null) {
                         continue;
@@ -101,11 +105,11 @@ class NHentaiAPI {
                     postIDs.add(int.parse(tempID));
                 }
 
-                Executor executor = Executor(concurrency: 15, rate: Rate.perSecond(5));
+                final Executor executor = Executor(concurrency: 15, rate: Rate.perSecond(5));
 
-                for (int postID in postIDs) {
+                for (final int postID in postIDs) {
                     executor.scheduleTask(() async {
-                        var post = await getPost(postID);
+                        final post = await getPost(postID);
                         if (post == null) return;
                         rawPosts.add(post);
                     });
@@ -127,7 +131,7 @@ class NHentaiAPI {
 
             return rawPosts;
         } catch (e, stackTrace) {
-            Nokulog.d("Failed to fetch posts matching \"$tags\".", error: e, stackTrace: stackTrace);
+            Nokulog.e("Failed to fetch posts matching \"$tags\".\n${_client.options.headers}", error: e, stackTrace: stackTrace);
             return rawPosts;
         }
     }
@@ -135,14 +139,14 @@ class NHentaiAPI {
     Future<Map<String, dynamic>?> getPost(int postID) async {
         try {
             //Nokulog.d("Getting post with id $postID");
-            Map<String, dynamic> result = await _makeRequest("${_url}gallery/$postID") as Map<String, dynamic>;
+            final Map<String, dynamic> result = await _makeRequest("${_url}gallery/$postID") as Map<String, dynamic>;
 
             if (result.containsKey("error")) {
                 Nokulog.e("NHentai result: $result");
                 return null;
             }
 
-            Map<String, dynamic> myResult = {};
+            final Map<String, dynamic> myResult = {};
 
             myResult["id"] = result["id"];
             myResult["title"] = result["title"]["english"];
@@ -150,14 +154,14 @@ class NHentaiAPI {
             myResult["images"] = [];
             myResult["dimensions"] = [];
 
-            int numOfPages = result["num_pages"];
-            int mediaID = int.parse(result["media_id"]);
+            final int numOfPages = result["num_pages"];
+            final int mediaID = int.parse(result["media_id"]);
 
-            var imageData = result["images"];
+            final imageData = result["images"];
 
             for (var i = 0; i < numOfPages; i++) {
-                var pageIndex = i + 1;
-                var image = imageData["pages"][i];
+                final pageIndex = i + 1;
+                final image = imageData["pages"][i];
 
                 myResult["images"].add(getImageUrl(mediaID, ImageType.image, mimeString: image["t"], pageNumber: pageIndex).toString());
                 myResult["dimensions"].add([image["w"], image["h"]]);
@@ -166,11 +170,19 @@ class NHentaiAPI {
             myResult["preview_url"] = getImageUrl(mediaID, ImageType.cover, mimeString: imageData["cover"]["t"]).toString();
             myResult["tags"] = [];
             myResult["authors"] = [];
+            myResult["sources"] = [];
+            myResult["characters"] = [];
 
-            for (var tag in result["tags"]) {
-                myResult["tags"].add(tag["name"]);
+            for (final tag in result["tags"]) {
+                
                 if (tag["type"] == "artist" || tag["type"] == "group") {
                     myResult["authors"].add(tag["name"]);
+                } else if (tag["type"] == "parody") {
+                    myResult["sources"].add(tag["name"]);
+                } else if (tag["type"] == "character") {
+                    myResult["characters"].add(tag["name"]);
+                } else {
+                    myResult["tags"].add(tag["name"]);
                 }
             }
 
@@ -180,7 +192,7 @@ class NHentaiAPI {
 
             return myResult;
         } catch(e, stackTrace) {
-            Nokulog.e("Failed to fetch post with ID $postID.", error: e, stackTrace: stackTrace);
+            Nokulog.e("Failed to fetch post with ID $postID.\n${defaultHeaders["Cookie"]}", error: e, stackTrace: stackTrace);
             return null;
         }
     }
@@ -190,7 +202,7 @@ class NHentaiAPI {
         
         if (postID == null) {
             try {
-                Response<String> response = await _client.get(_randomUrl);
+                final Response<String> response = await _client.get(_randomUrl);
                 Nokulog.d(response.redirects.map((e) => e.toString()));
             } catch(e, stackTrace) {
                 Nokulog.e("Failed to fetch random post.", error: e, stackTrace: stackTrace);
@@ -198,15 +210,14 @@ class NHentaiAPI {
             }
         }
 
-        List<Map<String, dynamic>> rawComments = [];
+        final List<Map<String, dynamic>> rawComments = [];
 
         if (postID == null) return rawComments;
         
         try {
-            List<dynamic> comments = await _makeRequest("${_url}gallery/$postID/comments");
+            final List<dynamic> comments = await _makeRequest("${_url}gallery/$postID/comments");
             
-            for (var comment in comments) {
-                print(comment["post_date"]);
+            for (final comment in comments) {
                 rawComments.add({
                     "id": comment["id"],
                     "post_id": postID,
@@ -220,7 +231,7 @@ class NHentaiAPI {
 
             return rawComments;
         } catch (e, stackTrace) {
-            Nokulog.e("Failed to fetch comments for post ID $postID.", error: e, stackTrace: stackTrace);
+            Nokulog.e("Failed to fetch comments for post ID $postID.\n${defaultHeaders["Cookie"]}", error: e, stackTrace: stackTrace);
             return rawComments;
         }
     }
@@ -230,7 +241,7 @@ class NHentaiAPI {
             return null;
         }
 
-        var rawComments = await searchComments(postID: postID);
+        final rawComments = await searchComments(postID: postID);
 
         try {
             return rawComments.firstWhere((element) => element["id"] == commentID);
@@ -238,7 +249,7 @@ class NHentaiAPI {
             Nokulog.e("No comment with ID $commentID for post $postID exists.", error: e, stackTrace: stackTrace);
             return null;
         } catch(e, stackTrace) {
-            Nokulog.e("Unexpected exception when fetching comment.", error: e, stackTrace: stackTrace);
+            Nokulog.e("Unexpected exception when fetching comment.\n${defaultHeaders["Cookie"]}", error: e, stackTrace: stackTrace);
             return null;
         }
     }
@@ -252,12 +263,18 @@ class NHentaiAPI {
 
         switch (fileString) {
             case "p":
+            case "png":
                 fileString = "png";
                 break;
 
             case "g":
+            case "gif":
                 fileString = "gif";
                 break;
+
+            case "w":
+            case "webp":
+                fileString = "webp";
 
             case "j":
             default:
@@ -272,16 +289,15 @@ class NHentaiAPI {
                 return Uri.parse("$_tinyImageUrl$mediaID/thumb.$fileString");
 
             case ImageType.image:
-            default:
                 return Uri.parse("$_imageUrl$mediaID/$pageNumber.$fileString");
         }
     }
 
     Future<dynamic> _makeRequest(String url, {Map<String, String>? params}) async {
-        String paramString = (params != null) ? mapToPairedString(params) : "";
-        Uri requestURL = Uri.parse("$url?$paramString");
+        final String paramString = (params != null) ? mapToPairedString(params) : "";
+        final Uri requestURL = Uri.parse("$url?$paramString");
 
-        Response<String> response = await _client.get(requestURL.toString());
+        final Response<String> response = await _client.get(requestURL.toString());
 
         if (response.data == null) {
             throw DioException(
@@ -293,6 +309,14 @@ class NHentaiAPI {
             );
         }
 
-        return jsonDecode(response.data!);
+        //Nokulog.d(response.headers.map);
+
+        final decoded = jsonDecode(response.data!);
+
+        if (decoded is String?) {
+            Nokulog.d(decoded);
+        }
+
+        return decoded;
     }
 }

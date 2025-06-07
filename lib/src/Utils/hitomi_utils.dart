@@ -16,8 +16,8 @@ class GG {
     GG(this.code);
 
     void parse() {
-        List<String> lines = code.split("\n");
-        for (String line in lines) {
+        final List<String> lines = code.split("\n");
+        for (final String line in lines) {
             if (line.startsWith("var o = ") && line.endsWith(";")) {
                 defaultO = int.parse(line.substring(8, line.length - 1));
             }
@@ -27,7 +27,7 @@ class GG {
             }
 
             if (line.startsWith("case ")) {
-                String matchedInt = line.substring(5, line.length - 1);
+                final String matchedInt = line.substring(5, line.length - 1);
                 caseList.add(int.parse(matchedInt));
             }
 
@@ -52,14 +52,14 @@ class GG {
     }
 
     String s(String h) {
-        RegExpMatch? match = exp.firstMatch(h);
+        final RegExpMatch? match = exp.firstMatch(h);
 
         if (match == null) {
             throw ArgumentError.value(h, "h", "Invalid hash format.");
         }
 
-        String m2 = match.group(2)!;
-        String m1 = match.group(1)!;
+        final String m2 = match.group(2)!;
+        final String m1 = match.group(1)!;
 
         return BigInt.parse(m2 + m1, radix: 16).toString();
     }
@@ -93,7 +93,7 @@ class HitomiFile {
             width: jsonData['width'],
             height: jsonData['height'],
             hash: jsonData['hash'],
-            hasWebp: jsonData['haswebp'],
+            hasWebp: jsonData['haswebp'] ?? 1,
             hasAvif: jsonData['hasavif'],
             hasAvifSmallTn: jsonData['hasavifsmalltn'],
         );
@@ -103,65 +103,132 @@ class HitomiFile {
 // Implementation of the Common set of functions from common.js
 class Common {
     final GG gg;
-
-    final r = RegExp(r"\/[0-9a-f]{61}([0-9a-f]{2})([0-9a-f])");
-    final subdomainReg = RegExp(r"\/\/..?\.hitomi\.la\/");
-    final otherReg = RegExp(r"^.*(..)(.)$");
-    final tnReg = RegExp(r"//tn\.hitomi\.la/[^/]+/[0-9a-f]/[0-9a-f]{2}/[0-9a-f]{64}");
-
+    // Constant from JavaScript.
+    static const String domain2 = 'gold-usergeneratedcontent.net';
+    final String domain = 'ltn.$domain2';
+  
     Common(String code) : gg = GG(code)..parse();
-
-    String subdomainFromUrl(String url, String urlBase) {
-        String returnValue = (urlBase.isEmpty) ? "b" : urlBase;
-    
-        var m = r.firstMatch(url);
-
-        if (m == null) return "a";
-
-        var g = int.parse(m.group(2)! + m.group(1)!, radix: 16);
-
-        if (!g.isNaN) {
-            returnValue = String.fromCharCode(97 + gg.m(g)) + returnValue;
+          
+  
+    /// Returns a subdomain computed from [url], [base], and [dir].
+    /// Replicates the JavaScript function subdomain_from_url.
+    String subdomainFromUrl(String url, String? base, String dir) {
+        String retval = '';
+        // In JS: if (!base) { ... }
+        if (base == null || base.isEmpty) {
+            if (dir == 'webp') {
+                retval = 'w';
+            } else if (dir == 'avif') {
+                retval = 'a';
+            }
+        }
+  
+        // Using radix 16.
+        final int b = 16;
+  
+        // RegExp: /\/[0-9a-f]{61}([0-9a-f]{2})([0-9a-f])/
+        final regExp = RegExp(r'\/[0-9a-f]{61}([0-9a-f]{2})([0-9a-f])');
+        final match = regExp.firstMatch(url);
+        if (match == null) {
+            //print("retval1: $retval");
+            return retval;
+        }
+  
+        // Note: JavaScript concatenates m[2]+m[1]
+        final hexPair = match.group(2)! + match.group(1)!;
+        final g = int.tryParse(hexPair, radix: b);
+        // Check against NaN.
+        if (g != null) {
+            if (base != null && base.isNotEmpty) {
+                // Use gg.m(g) to determine a character offset.
+                retval = String.fromCharCode(97 + gg.m(g)) + base;
+            } else {
+                retval = retval + (1 + gg.m(g)).toString();
+            }
         }
 
-        return returnValue;
+        //print("retval2: $retval");
+        return retval;
     }
-
-    String urlFromUrl(String url, String urlBase) {
-        String subdomain = subdomainFromUrl(url, urlBase);
-
-        return url.replaceAll(subdomainReg, "//$subdomain.hitomi.la/");
+  
+    /// Returns a new URL by replacing the hostname in [url] with a computed subdomain.
+    /// Replicates the JavaScript function url_from_url.
+    String urlFromUrl(String url, String? base, String dir) {
+        // The regular expression looks for the host portion with either hitomi.la or gold-usergeneratedcontent.net.
+        final regExp = RegExp(r'\/\/..?\.(?:gold-usergeneratedcontent\.net|hitomi\.la)\/');
+        final replacement = '//${subdomainFromUrl(url, base, dir)}.$domain2/';
+        return url.replaceFirst(regExp, replacement);
     }
-
+  
+    /// Computes the full path from a given hash.
+    /// Mirrors full_path_from_hash(hash) => gg.b+gg.s(hash)+'/'+hash.
     String fullPathFromHash(String hash) {
-        return "${gg.b}${gg.s(hash)}/$hash";
+        return  '${gg.b + gg.s(hash)}/$hash';
     }
-
+  
+    /// Computes a “real” full path from the hash.
+    /// Mirrors real_full_path_from_hash(hash).
     String realFullPathFromHash(String hash) {
-        return hash.replaceAllMapped(otherReg, 
-            (m) => "${m.group(2)}/${m.group(1)}/$hash"
-        );
-    }
-
-    String urlFromHash(String galleryID, HitomiFile image, String dir, String ext) {
-        ext = (ext.isNotEmpty) ? ext : ((dir.isNotEmpty) ? dir : image.name.split(".").last);
-        dir = (dir.isNotEmpty) ? dir : "images";
-
-        return "https://a.hitomi.la/$dir/${fullPathFromHash(image.hash)}.$ext";
-    }
-
-    String urlFromUrlFromHash(String galleryID, HitomiFile image, String dir, String ext, String urlBase) {
-        if (urlBase == "tn") {
-            return urlFromUrl("https://a.hitomi.la/$dir/${realFullPathFromHash(image.hash)}.$ext", urlBase);
+        // JavaScript equivalent: hash.replace(/^.*(..)(.)$/, '$2/$1/'+hash);
+        final regExp = RegExp(r'^.*(..)(.)$');
+        final match = regExp.firstMatch(hash);
+        if (match != null) {
+            return match.group(2)! + r'/' + match.group(1)! + r'/' + hash;
         }
-
-        return urlFromUrl(urlFromHash(galleryID, image, dir, ext), urlBase);
+        return hash;
     }
-
+  
+    /// Constructs a URL from a gallery hash.
+    /// Mirrors url_from_hash(galleryid, image, dir, ext)
+    String urlFromHash(String galleryId, HitomiFile image, String dir, [String? ext]) {
+        // Determine extension: ext || dir || image.name.split('.').pop();
+        String computedExt;
+        if (ext != null && ext.isNotEmpty) {
+            computedExt = ext;
+        } else if (dir.isNotEmpty) {
+            computedExt = dir;
+        } else {
+            // Assumes image.name is something like "foo.jpg".
+            final parts = image.name.split('.');
+            computedExt = parts.isNotEmpty ? parts.last : '';
+        }
+  
+        // If the directory indicates a special image type, then don’t use it as folder.
+        if (dir == 'webp' || dir == 'avif') {
+            dir = '';
+        } else if (dir.isNotEmpty) {
+            dir = '$dir/';
+        }
+  
+        return r'https://a.' + domain2 + r'/' + dir + fullPathFromHash(image.hash) + r'.' + computedExt;
+    }
+  
+    /// Constructs a URL from a gallery hash and then processes it further.
+    /// Mirrors url_from_url_from_hash(galleryid, image, dir, ext, base)
+    String urlFromUrlFromHash(String galleryId, HitomiFile image, String dir, String ext, [String? base]) {
+        if (base == 'tn') {
+            // When base is 'tn' use the "real" full path.
+            final url = r'https://a.' +
+                domain2 +
+                r'/' +
+                dir +
+                r'/' +
+                realFullPathFromHash(image.hash) +
+                r'.' +
+                ext;
+            return urlFromUrl(url, base, dir);
+        }
+        return urlFromUrl(urlFromHash(galleryId, image, dir, ext), base, dir);
+    }
+  
+    /// Rewrites thumbnail paths in [html] by replacing the tn.hitomi.la URLs.
+    /// Mirrors rewrite_tn_paths(html).
     String rewriteTnPaths(String html) {
-        return html.replaceAllMapped(tnReg, 
-            (m) => urlFromUrl(m.group(0)!, "tn")
-        );
+        // Matches URLs like: //tn.hitomi.la/[^/]+/[0-9a-f]/[0-9a-f]{2}/[0-9a-f]{64}
+        final regExp = RegExp(r'\/\/tn\.hitomi\.la\/[^\/]+\/[0-9a-f]\/[0-9a-f]{2}\/[0-9a-f]{64}');
+        return html.replaceAllMapped(regExp, (match) {
+            return urlFromUrl(match.group(0)!, 'tn', '');
+        });
     }
 
     String getThumbnail(String galleryID, HitomiFile image) {
@@ -169,12 +236,14 @@ class Common {
     }
 
     List<String> imageUrls(String galleryID, List<HitomiFile> images, {bool preferWebp = true}) {
-        return images.map(
-            (image) => imageUrlFromImage(galleryID, image, preferWebp: preferWebp)
-        ).toList();
+        return images
+            .map((image) => imageUrlFromImage(galleryID, image, preferWebp: preferWebp))
+            .toList();
     }
 
-    String imageUrlFromImage(String galleryID, HitomiFile image, {bool preferWebp = true}) {
-        return urlFromUrlFromHash(galleryID, image, (image.hasAvif == 1 && !preferWebp) ? "avif" : "webp", "", "a");
+    String imageUrlFromImage(String galleryID, HitomiFile image, {bool preferWebp = false}) {
+        // Choose "avif" if available and not preferring webp; otherwise "webp".
+        final String chosenDir = (image.hasAvif == 1 && !preferWebp) ? "avif" : "webp";
+        return urlFromUrlFromHash(galleryID, image, chosenDir, "", "");
     }
 }

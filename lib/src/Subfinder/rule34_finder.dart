@@ -3,9 +3,11 @@
 import "dart:math";
 
 import "package:async/async.dart";
+import "package:nokufind/src/Utils/dtext_parser.dart";
+import "package:nokufind/src/description.dart";
 
 import "subfinder.dart";
-import "../Utils/rule34_api.dart";
+import "../API/rule34_api.dart";
 import "../Utils/utils.dart";
 import "../post.dart";
 import "../comment.dart";
@@ -22,18 +24,29 @@ List<Map<String, dynamic>> _filterInvalidComments(List<Map<String, dynamic>> com
 
 class Rule34Finder implements ISubfinder {
     static Post toPost(Map<String, dynamic> postData) {
+        String? sampleURL;
+        Dimensions? sampleDimensions;
+        
+        if (postData["sample"] == true) {
+            sampleURL = postData["sample_url"];
+            sampleDimensions = Dimensions(postData["sample_width"], postData["sample_height"]);
+        }
+
         return Post(
             postID: postData["id"], 
             tags: List<String>.from(postData["tags"]), 
             sources: List<String>.from(postData["sources"]), 
             images: [postData["file_url"]], 
+            altImages: (sampleURL != null) ? [sampleURL] : null,
             authors: List<String>.from(postData["authors"]), //(postData["tag_string_artist"] as String).split(" "), 
             source: "rule34", 
             preview: postData["preview_url"], 
             md5: [postData["hash"]], 
             rating: postData["rating"], 
             parentID: (postData["parent_id"] != 0) ? postData["parent_id"] : null, 
-            dimensions: [[postData["width"], postData["height"]]], 
+            dimensions: [
+                Dimensions(postData["width"], postData["height"], alt: sampleDimensions)
+            ],
             poster: postData["owner"],
             posterID: null, 
             title: null
@@ -46,7 +59,7 @@ class Rule34Finder implements ISubfinder {
             postID: commentData["post_id"], 
             creatorID: commentData["creator_id"],
             creator: commentData["creator"] ?? "User ${commentData['creator_id']}",
-            body: commentData["body"], 
+            body: DTextParser.parse(commentData["body"]), 
             source: "rule34",
             createdAt: commentData["created_at"] as DateTime
         );
@@ -66,6 +79,10 @@ class Rule34Finder implements ISubfinder {
         );
     }
 
+    static Description toDescription(Map<String, dynamic> descriptionData) {
+        throw UnimplementedError("Rule34 has no descriptions. Do not use toDescription.");
+    }
+
     final Rule34API _client;
     final _config = SubfinderConfiguration();
     final List<CancelableCompleter> _completers = [];
@@ -74,16 +91,16 @@ class Rule34Finder implements ISubfinder {
 
     @override
     Future<List<Post>> searchPosts(String tags, {int limit = 1000, int? page}) async {
-        page = (page == null) ? 0 : page - 1;
+        page = (page == null) ? 0 : page;
         page = (page < 0) ? 0 : page;
 
-        CancelableCompleter<List<Post>> completer = CancelableCompleter(
+        final CancelableCompleter<List<Post>> completer = CancelableCompleter(
             onCancel: () {
                 Nokulog.w("Search for \"$tags\" was cancelled.");
             }
         );
 
-        var searchFuture = _getAllPosts(tags, completer, limit: limit, page: page);
+        final searchFuture = _getAllPosts(tags, completer, limit: limit, page: page);
 
         _completers.add(completer);
 
@@ -93,10 +110,26 @@ class Rule34Finder implements ISubfinder {
     }
 
     @override
+    Future<List<Post>> searchPostsAdvanced(String tags, {String optionalTags = "", String blacklist = "", int limit = 100, int? page}) {
+        final baseTags = tags.trim().split(" ");
+        final optionalTagList = (optionalTags.isNotEmpty) ? optionalTags.trim().split(" ") : <String>[];
+        final blacklistTags = (blacklist.isNotEmpty) ? blacklist.trim().split(" ").map((element) => "-$element") : <String>[];
+
+        final optionalTagString = (optionalTagList.isNotEmpty) ? " ( ${optionalTagList.join(" ~ ")} )" : "";
+        final blacklistString = (blacklist.isNotEmpty) ? " ${blacklistTags.join(" ")}" : "";
+
+        return searchPosts(
+            "${baseTags.join(" ")}$optionalTagString$blacklistString", 
+            limit: limit, 
+            page: page
+        );
+    }
+
+    @override
     Future<Post?> getPost(int postID) async {
         if (postID <= 0) return null;
 
-        var rawPost = await _client.getPost(postID);
+        final rawPost = await _client.getPost(postID);
 
         return (rawPost != null) ? toPost(rawPost) : null;
     }
@@ -105,27 +138,32 @@ class Rule34Finder implements ISubfinder {
     Future<List<Comment>> searchComments({int? postID, int limit = 100, int? page}) async {
         page = (page == null) ? 0 : page;
 
-        var rawComments = await _client.searchComments(postID: postID, limit: limit, page: page);
+        final rawComments = await _client.searchComments(postID: postID, limit: limit, page: page);
 
         //rawComments = _filterInvalidComments(rawComments);
 
-        return [for (var rawComment in rawComments) toComment(rawComment)];
+        return [for (final rawComment in rawComments) toComment(rawComment)];
     }
 
     @override
     Future<Comment?> getComment(int commentID, {int? postID}) async {
         if (postID == null) return null;
 
-        var rawComment = await _client.getComment(commentID, postID);
+        final rawComment = await _client.getComment(commentID, postID);
 
         return (rawComment != null) ? toComment(rawComment) : null;
     }
 
     @override
     Future<List<Note>> getNotes(int postID) async {
-        var rawNotes = await _client.getNotes(postID);
+        final rawNotes = await _client.getNotes(postID);
 
-        return [for (var rawNote in rawNotes) toNote(rawNote)];
+        return [for (final rawNote in rawNotes) toNote(rawNote)];
+    }
+
+    @override
+    Future<Description?> getDescription(int postID) async {
+        return null;
     }
 
     @override
@@ -146,7 +184,7 @@ class Rule34Finder implements ISubfinder {
     Future<void> cancelLastSearch() async {
         if (_completers.isEmpty) return;
 
-        var lastCompleter = _completers.removeLast();
+        final lastCompleter = _completers.removeLast();
         lastCompleter.operation.cancel();
     }
 
@@ -156,15 +194,15 @@ class Rule34Finder implements ISubfinder {
         page = (page == null) ? 0 : page;
 
         List<Post> currentPosts = [];
-        int defaultSize = 1000;
-        int checkSize = min(defaultSize, limit);
+        final int defaultSize = 1000;
+        final int checkSize = min(defaultSize, limit);
         int currentSize = checkSize;
-        int currentPage = page;
+        int currentPage = (limit > checkSize) ? (page * (limit / checkSize)).floor() : page;
 
         while (currentSize == checkSize) {
             if (completer.isCanceled) return [];
 
-            var rawPosts = await _client.searchPosts(tags, limit: checkSize, page: currentPage);
+            final rawPosts = await _client.searchPosts(tags, limit: checkSize, page: currentPage);
 
             if (completer.isCanceled) return [];
 

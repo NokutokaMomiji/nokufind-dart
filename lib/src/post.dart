@@ -7,29 +7,50 @@ import 'dart:typed_data';
 import 'package:dio/dio.dart';
 import 'package:dio_http2_adapter/dio_http2_adapter.dart';
 import 'package:executor/executor.dart';
+import 'package:nokufind/src/Utils/observable_map.dart';
 import 'package:nokufind/src/Utils/post_file.dart';
 import 'Utils/utils.dart';
 
 import "package:html_unescape/html_unescape_small.dart";
 final temp = HtmlUnescape();
 
+extension ListFetch on List {
+    T getDefault<T>(int index, T defaultValue) {
+        if (index < 0 || index >= length) return defaultValue;
+
+        return this[index];
+    }
+}
+
 /// Enum that represents the rating of a post.
 enum Rating { general, sensitive, questionable, explicit, unknown }
 
 Future<void> generateMD5(Post post) async {
-    var data = await post.data.first.fetch();
+    final data = await post.data.first.fetch();
     if (data == null) return;
     post.md5.add(calculateMD5(data));
+}
+
+enum TagType {
+    general,
+    artist,
+    character,
+    series
 }
 
 class Tag {
     final String original;
     final String translated;
+    final TagType type;
 
-    const Tag(this.original, {this.translated = ""});
+    const Tag(this.original, {this.translated = "", this.type = TagType.general});
 
     factory Tag.fromMap(Map<String, dynamic> data) {
-        return Tag(temp.convert(data["original"].toString()), translated: temp.convert(data["translated"].toString()));
+        return Tag(temp.convert(data["original"].toString()), translated: temp.convert(data["translated"].toString()), type: TagType.values[data["type"] ?? 0]);
+    }
+
+    factory Tag.toType(Tag tag, TagType type) {
+        return Tag(tag.original, translated: tag.translated, type: type);
     }
 
     bool contains(Pattern other, [int startIndex = 0]) {
@@ -51,7 +72,8 @@ class Tag {
     Map<String, dynamic> toMap() {
         return {
             "original": original,
-            "translated": translated
+            "translated": translated,
+            "type": type.index
         };
     }
 
@@ -76,6 +98,7 @@ class Post {
     static List<String> ratingSensitive = ["sensitive", "s"];
     static List<String> ratingQuestionable = ["questionable", "q"];
     static List<String> ratingExplicit = ["explicit", "e"];
+    static final ObservableMap<String, Tag> specialTags = ObservableMap();
     static bool generateMissingMD5 = false;
     static Rate? fetchRate;
 
@@ -93,15 +116,21 @@ class Post {
     }
 
     static Post importPost(String filePath) {
-        String fileContent = File(filePath).readAsStringSync();
-        Map<String, dynamic> jsonData = jsonDecode(fileContent);
+        final String fileContent = File(filePath).readAsStringSync();
+        final Map<String, dynamic> jsonData = jsonDecode(fileContent);
 
         return importPostFromMap(jsonData);
     }
 
     static Post importPostFromMap(Map<String, dynamic> jsonData) {
         for (var i = 0; i < jsonData["dimensions"].length; i++) {
-            jsonData["dimensions"][i] = List<int>.from(jsonData["dimensions"][i]);
+            final current = jsonData["dimensions"][i];
+
+            if (current is List) {
+                jsonData["dimensions"][i] = List<int>.from(jsonData["dimensions"][i]);
+            } else if (current is Map) {
+                jsonData["dimensions"][i] = Map<String, dynamic>.from(jsonData["dimensions"][i]);
+            }
         }
         
         Map<String, String> headers = {};
@@ -114,7 +143,8 @@ class Post {
             postID: jsonData["post_id"],
             tags: (jsonData["tags"] as List).map<Tag>((element) {
                 if (element is Map) {
-                    return Tag.fromMap(Map<String, String>.from(element));
+                    final current = Map<String, dynamic>.from(element);
+                    return Tag.fromMap(current);
                 }
 
                 if (element is String) {
@@ -153,6 +183,7 @@ class Post {
           required List<Object> tags, 
           required List<String> sources, 
           required List<String> images, 
+          List<String>? altImages,
           required List<String> authors, 
           required String source, 
           required String preview, 
@@ -167,27 +198,55 @@ class Post {
         addSmartRetry(_client);
         addSmartRetry(_fallbackClient);
 
-        postData["post_id"] = postID;
-        postData["tags"] = tags.map((element) {
+        final List<Tag> typedTags = tags.map<Tag>((element) {
             if (element is String) {
+                if (specialTags.containsKey(element)) return specialTags[element]!;
+
                 return Tag(element);
             }
 
             if (element is Tag) {
+                if (specialTags.containsKey(element.original)) return specialTags[element.original]!;
+
                 return element;
             }
 
             throw TypeError();
         }).toList();
+
+        _updateSpecialTags(typedTags.where((element) => (element.type != TagType.general || element.translated.isNotEmpty) && element.original != "bow"));
+
+        postData["post_id"] = postID;
+        postData["tags"] = typedTags;
+
+        final List<Dimensions> typedDimensions = dimensions.map<Dimensions>((dimension) {
+            if (dimension is List) {
+                return Dimensions.fromList(List<int>.from(dimension));
+            }
+
+            if (dimension is Map) {
+                return Dimensions.fromMap(Map<String, dynamic>.from(dimension));
+            }
+
+            if (dimension is Dimensions) {
+                return dimension;
+            }
+
+            throw TypeError();
+        }).toList();
+
+        authors = authors.where((element) => element.trim().isNotEmpty).toList();
+        sources = sources.where((element) => element.trim().isNotEmpty).toList();
+
         postData["sources"] = sources;
         postData["images"] = images;
-        postData["authors"] = authors;
+        postData["authors"] = (authors.isNotEmpty) ? authors : typedTags.where((tag) => tag.type == TagType.artist).map((element) => element.original).toList();
         postData["source"] = source;
         postData["preview"] = preview;
         postData["md5"] = md5 ?? <String>[];
         postData["rating"] = (rating is Rating) ? rating : Post.getRating(rating);
         postData["parent_id"] = parentID;
-        postData["dimensions"] = [for (var dimension in dimensions) List<int>.from(dimension)];
+        postData["dimensions"] = typedDimensions;
         postData["poster"] = poster;
         postData["poster_id"] = posterID;
         postData["name"] = title ?? "Post #$postID";
@@ -197,14 +256,16 @@ class Post {
             postData["filenames"].add(item.split("/").last);
         });
 
-        int numOfFiles = postData["images"].length;
+        final int numOfFiles = postData["images"].length;
         data = List.unmodifiable([
             for (int i = 0; i < numOfFiles; i++) PostFile(
-                url: this.images[i], 
+                url: this.images[i],
+                altUrl: altImages?.getDefault<String?>(i, null),
                 filename: filenames[i], 
                 headers: headers, 
                 client: _client, 
-                fallbackClient: _fallbackClient
+                fallbackClient: _fallbackClient,
+                dimensions: typedDimensions[i]
             )
         ]);
 
@@ -216,7 +277,7 @@ class Post {
     Future<String> exportPost(String path, {bool withImages = false}) async {
         await Directory(path).create(recursive: true);
     
-        String filePath = "$path/$identifier.json";
+        final String filePath = "$path/$identifier.json";
 
         await File(filePath).writeAsString(toJsonString());
 
@@ -229,24 +290,24 @@ class Post {
 
     Future<String?> downloadImage(String path, {int index = 0}) async {
         Directory(path).createSync(recursive: true);
-        String filePath = "$path/${filenames[index]}";
+        final String filePath = "$path/${filenames[index]}";
 
-        var possibleData = get(data, index, defaultValue: null)?.data;
+        final possibleData = get(data, index, defaultValue: null)?.data;
 
         if (possibleData != null) {
             await File(filePath).writeAsBytes(possibleData, flush: true);
             return filePath;
         }
 
-        String requestURL = images[index];
+        final String requestURL = images[index];
         
-        Map<String, String> temp = _prepareHeaders();
+        final Map<String, String> temp = _prepareHeaders();
 
         _client.options.headers = temp;
         _client.options.responseType = ResponseType.bytes;
 
         try {
-            Response<Uint8List> response = await _client.get(requestURL);
+            final Response<Uint8List> response = await _client.get(requestURL);
             await File(filePath).writeAsBytes(response.data!, flush: true);
             return filePath;
         } catch (e, stackTrace) {
@@ -256,7 +317,7 @@ class Post {
         try {
             _fallbackClient.options.headers = temp;
             _fallbackClient.options.responseType = ResponseType.bytes;
-            Response<Uint8List> response = await _fallbackClient.get(requestURL);
+            final Response<Uint8List> response = await _fallbackClient.get(requestURL);
             await File(filePath).writeAsBytes(response.data!, flush: true);
             return filePath;
         } catch (e, stackTrace) {
@@ -266,7 +327,7 @@ class Post {
     }
     
     Future<List<String?>> downloadAll(String path) async {
-        Executor executor = Executor(concurrency: 10, rate: fetchRate);
+        final Executor executor = Executor(concurrency: 10, rate: fetchRate);
         
         for (int i = 0; i < images.length; i++) {
             executor.scheduleTask(() async {
@@ -274,14 +335,14 @@ class Post {
             });
         }
 
-        List<String?> values = List<String?>.from(await executor.join(withWaiting: true));
+        final List<String?> values = List<String?>.from(await executor.join(withWaiting: true));
         await executor.close();
 
         return values;
     }
 
     void _updateHeaders(Map<String, String> headers) {
-        for (var file in data) {
+        for (final file in data) {
             file.headers = headers;
         }
     }
@@ -298,7 +359,7 @@ class Post {
     }
 
     String toJsonString() {
-        var data = Map<String, dynamic>.from(postData);
+        final data = Map<String, dynamic>.from(postData);
         data["headers"] = headers;
 
         return jsonEncode(data, toEncodable: (obj) {
@@ -310,10 +371,11 @@ class Post {
 
     Map<String, dynamic> toJson() {
     	try {
-            var data = Map<String, dynamic>.from(postData);
+            final data = Map<String, dynamic>.from(postData);
             if (data["rating"] is Rating) data["rating"] = (data["rating"] as Rating).index;
             data["tags"] = (data["tags"] as List).map((e) => e.toMap()).toList();
             data["headers"] = headers;
+            data["dimensions"] = (data["dimensions"] as List<Dimensions>).map((element) => element.toMap()).toList();
             return data;
         } catch (e, stackTrace) {
             Nokulog.e("Failed to convert post to JSON.", error: e, stackTrace: stackTrace);
@@ -322,14 +384,14 @@ class Post {
     }
 
     Future<void> fetchData({bool onlyMainImage = false}) async {
-        List<PostFile> unfetchedFiles = data.where((file) => file.data == null).toList();
+        final List<PostFile> unfetchedFiles = data.where((file) => file.data == null).toList();
 
         if ((onlyMainImage && data.first.data != null) || unfetchedFiles.isEmpty) {
             Nokulog.w("All requested data has been fetched for post. Returning.");
             return;
         }
 
-        Executor executor = Executor(concurrency: 10, rate: fetchRate);
+        final Executor executor = Executor(concurrency: 10, rate: fetchRate);
         _executor = executor;
 
         if (onlyMainImage) {
@@ -339,7 +401,7 @@ class Post {
 
         Nokulog.d("$identifier data length: ${data.length}");
 
-        for (var file in unfetchedFiles) {
+        for (final file in unfetchedFiles) {
             executor.scheduleTask(() async {
                 Nokulog.d("$identifier requesting image \"${file.url}\"...");
                 await file.fetch();
@@ -352,7 +414,7 @@ class Post {
 
 
     Future<void> cancelFetch() async {
-        Executor? executor = _executor;
+        final Executor? executor = _executor;
 
         if (executor == null) return;
 
@@ -363,15 +425,27 @@ class Post {
     void clearData([bool keepMainImage = true]) async {
         if (keepMainImage && data.length == 1) return;
 
-        var files = (keepMainImage) ? data.sublist(1) : data;
+        final files = (keepMainImage) ? data.sublist(1) : data;
     
-        for (var file in files) {
+        for (final file in files) {
             file.clear();
         }
     }
 
+    Future<void> recheckTags() async {
+        postData["tags"] = (postData["tags"] as List<Tag>).map(
+            (element) => specialTags[element.original] ?? element
+        ).toList();
+    }
+
+    static void _updateSpecialTags(Iterable<Tag> tags) {
+        for (final tag in tags) {
+            specialTags[tag.original] = tag;
+        }
+    }
+
     Map<String, String> _prepareHeaders() {
-        Map<String, String> temp = Map<String, String>.from(headers);
+        final Map<String, String> temp = Map<String, String>.from(headers);
         if (cookies.isEmpty) return temp;
 
         temp["Cookie"] = mapToPairedString(cookies, separator: ';');
@@ -417,7 +491,7 @@ class Post {
     
     int? get parentID => postData["parent_id"];
     
-    List<List<int>> get dimensions => postData["dimensions"];
+    List<Dimensions> get dimensions => postData["dimensions"];
     
     String get poster => postData["poster"];
     

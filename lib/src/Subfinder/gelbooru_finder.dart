@@ -1,11 +1,10 @@
-
-
 import "dart:math";
 
 import "package:async/async.dart";
+import "package:nokufind/src/description.dart";
 
 import "subfinder.dart";
-import "../Utils/gelbooru_api.dart";
+import "../API/gelbooru_api.dart";
 import "../Utils/utils.dart";
 import "../post.dart";
 import "../comment.dart";
@@ -22,18 +21,29 @@ List<Map<String, dynamic>> _filterInvalidComments(List<Map<String, dynamic>> com
 
 class GelbooruFinder implements ISubfinder {
     static Post toPost(Map<String, dynamic> postData) {
+        String? sampleURL;
+        Dimensions? sampleDimensions;
+
+        if (postData["sample"] == 1) {
+            sampleURL = postData["sample_url"];
+            sampleDimensions = Dimensions(postData["sample_width"], postData["sample_height"]);
+        }
+
         return Post(
             postID: postData["id"], 
             tags: (postData["tags"] as String).split(" "), 
             sources: (postData["source"] as String).split(" "), 
-            images: [postData["file_url"]], 
+            images: [postData["file_url"]],
+            altImages: (sampleURL != null) ? [sampleURL] : null,
             authors: [], //(postData["tag_string_artist"] as String).split(" "), 
             source: "gelbooru", 
             preview: postData["preview_url"], 
             md5: [postData["md5"]], 
             rating: postData["rating"], 
             parentID: (postData["parent_id"] != 0) ? postData["parent_id"] : null, 
-            dimensions: [[postData["width"], postData["height"]]], 
+            dimensions: [
+                Dimensions(postData["width"], postData["height"], alt: sampleDimensions)
+            ], 
             poster: postData["owner"],
             posterID: postData["creator_id"], 
             title: null
@@ -66,22 +76,52 @@ class GelbooruFinder implements ISubfinder {
         );
     }
 
+    static Description toDescription(Map<String, dynamic> descriptionData) {
+        throw UnimplementedError("Gelbooru has no descriptions. Do not use toDescription.");
+    }
+
     final GelbooruAPI _client = GelbooruAPI();
     final _config = SubfinderConfiguration();
     final List<CancelableCompleter> _completers = [];
 
     @override
     Future<List<Post>> searchPosts(String tags, {int limit = 100, int? page}) async {
-        page = (page == null) ? 0 : page - 1;
+        page = (page == null) ? 0 : page;
         page = (page < 0) ? 0 : page;
 
-        CancelableCompleter<List<Post>> completer = CancelableCompleter(
+        final CancelableCompleter<List<Post>> completer = CancelableCompleter(
             onCancel: () {
                 Nokulog.w("Search for \"$tags\" was cancelled.");
+                _client.cancel();
             }
         );
 
-        var searchFuture = _getAllPosts(tags, completer, limit: limit, page: page);
+        final searchFuture = _getAllPosts(tags, completer, limit: limit, page: page);
+
+        _completers.add(completer);
+
+        completer.complete(searchFuture);
+
+        return completer.operation.value;
+    }
+
+    @override
+    Future<List<Post>> searchPostsAdvanced(String tags, {String optionalTags = "", String blacklist = "", int limit = 100, int? page}) async {
+        if (optionalTags.isEmpty && blacklist.isEmpty) {
+            return searchPosts(tags, limit: limit, page: page);
+        }
+
+        page = (page == null) ? 0 : page;
+        page = (page < 0) ? 0 : page;
+
+        final CancelableCompleter<List<Post>> completer = CancelableCompleter(
+            onCancel: () {
+                Nokulog.w("Search for \"$tags\" was cancelled.");
+                _client.cancel();
+            }
+        );
+
+        final searchFuture = _getAdvancedPosts(tags, optionalTags, blacklist, completer, limit: limit, page: page);
 
         _completers.add(completer);
 
@@ -94,7 +134,7 @@ class GelbooruFinder implements ISubfinder {
     Future<Post?> getPost(int postID) async {
         if (postID <= 0) return null;
 
-        var rawPost = await _client.getPost(postID);
+        final rawPost = await _client.getPost(postID);
 
         return (rawPost != null) ? toPost(rawPost) : null;
     }
@@ -103,27 +143,32 @@ class GelbooruFinder implements ISubfinder {
     Future<List<Comment>> searchComments({int? postID, int limit = 100, int? page}) async {
         page = (page == null) ? 0 : page;
 
-        var rawComments = await _client.searchComments(postID: postID, limit: limit, page: page);
+        final rawComments = await _client.searchComments(postID: postID, limit: limit, page: page);
 
         //rawComments = _filterInvalidComments(rawComments);
 
-        return [for (var rawComment in rawComments) toComment(rawComment)];
+        return [for (final rawComment in rawComments) toComment(rawComment)];
     }
 
     @override
     Future<Comment?> getComment(int commentID, {int? postID}) async {
         if (postID == null) return null;
 
-        var rawComment = await _client.getComment(commentID, postID);
+        final rawComment = await _client.getComment(commentID, postID);
 
         return (rawComment != null) ? toComment(rawComment) : null;
     }
 
     @override
     Future<List<Note>> getNotes(int postID) async {
-        var rawNotes = await _client.getNotes(postID);
+        final rawNotes = await _client.getNotes(postID);
 
-        return [for (var rawNote in rawNotes) toNote(rawNote)];
+        return [for (final rawNote in rawNotes) toNote(rawNote)];
+    }
+
+    @override
+    Future<Description?> getDescription(int postID) async {
+        return null;
     }
 
     @override
@@ -144,7 +189,7 @@ class GelbooruFinder implements ISubfinder {
     Future<void> cancelLastSearch() async {
         if (_completers.isEmpty) return;
 
-        var lastCompleter = _completers.removeLast();
+        final lastCompleter = _completers.removeLast();
         lastCompleter.operation.cancel();
     }
 
@@ -154,15 +199,15 @@ class GelbooruFinder implements ISubfinder {
         page = (page == null) ? 0 : page;
 
         List<Post> currentPosts = [];
-        int defaultSize = 100;
-        int checkSize = min(defaultSize, limit);
+        final int defaultSize = 100;
+        final int checkSize = min(defaultSize, limit);
         int currentSize = checkSize;
-        int currentPage = page;
+        int currentPage = (limit > checkSize) ? (page * (limit / checkSize)).floor() : page;
 
         while (currentSize == checkSize) {
             if (completer.isCanceled) return [];
 
-            var rawPosts = await _client.searchPosts(tags, limit: checkSize, page: currentPage);
+            final rawPosts = await _client.searchPosts(tags, limit: checkSize, page: currentPage);
             if (completer.isCanceled) return [];
             
             currentSize = rawPosts.length;
@@ -186,6 +231,85 @@ class GelbooruFinder implements ISubfinder {
         return currentPosts;
     }
     
-      @override
-      SubfinderConfiguration get configuration => _config;
+    Future<List<Post>> _getAdvancedPosts(String tags, String optionalTags, String blacklist, CancelableCompleter completer, {int limit = 100, int? page}) async {
+        if (completer.isCanceled) return [];
+
+        // If the page index is null, we begin by 0.
+        page = (page == null) ? 0 : page;
+
+        // We split the tags and the optional tags by spaces since the client doesn't use quotes.
+        final List<String> splitTags = tags.trim().split(" ");
+        final List<String> splitOptionalTags = (optionalTags.isNotEmpty) ? optionalTags.trim().split(" ") : [];
+        final Iterable<String> splitBlacklist = (blacklist.isNotEmpty) ? blacklist.trim().split(" ").map((element) => "-$element") : [];
+        final List<String> queries = [];
+
+        for (final optionalTag in splitOptionalTags) {
+            queries.add(
+                [...splitTags, optionalTag, ...splitBlacklist]  // We merge the tags, one optional tag, and the blacklisted tags.
+                .where((element) => element.isNotEmpty)         // We remove any empty strings.
+                .join(" ")                                      // We join them into a singular empty string.
+            );
+        }
+
+        final int postsPerQuery = (limit / queries.length).ceil();
+
+        List<Post> currentPosts = [];
+        final int defaultSize = 100;
+        final int checkSize = min(min(defaultSize, limit), postsPerQuery);
+        int currentSize = checkSize;
+        int currentPage = (limit > checkSize) ? (page * (limit / checkSize)).floor() : page;
+        final Map<String, bool> queryIsExhausted = {for (final query in queries) query: false};
+
+        while (currentSize == checkSize) {
+            if (completer.isCanceled) return [];
+
+            if (queryIsExhausted.values.every((value) => value)) {
+                break;
+            }
+
+            final futures = queries.where((element) => !queryIsExhausted[element]!,).map((query) {
+                return () async {
+                    if (completer.isCanceled) return <Map<String, dynamic>>[];
+
+                    final results = await _client.searchPosts(query, limit: checkSize, page: currentPage);
+
+                    if (results.length < checkSize) {
+                        queryIsExhausted[query] = true;
+                    }
+
+                    return results;
+                }();
+            });
+
+            if (completer.isCanceled) return [];
+
+            final results = await Future.wait(futures);
+
+            if (results.isEmpty) {
+                break;
+            }
+            
+            for (final result in results) {
+                currentPosts.addAll(result.map(toPost));
+                currentSize = max(currentSize, result.length);
+            }
+
+            if (currentPosts.length >= limit) {
+                break;
+            }
+
+            currentPage += 1;
+        }
+
+        currentPosts.sort((a, b) => a.postID.compareTo(b.postID));
+
+        if (currentPosts.length > limit) {
+            currentPosts = currentPosts.sublist(0, limit);
+        }
+
+        return currentPosts;
+    }
+
+    @override
+    SubfinderConfiguration get configuration => _config;
 }

@@ -1,3 +1,5 @@
+import 'package:nokufind/src/description.dart';
+
 import '../post.dart';
 import '../comment.dart';
 import '../note.dart';
@@ -10,7 +12,7 @@ class SubfinderConfiguration {
     final Map<String, String> _cookies = {};
     bool _setProperties = false;
 
-    SubfinderConfiguration({Function(String, dynamic, bool, bool)? callback}) {
+    SubfinderConfiguration({Function(String key, dynamic value, bool isCookie, bool isHeader)? callback}) {
         _callback = callback;
         
         _config["api_key"] = null;
@@ -63,7 +65,7 @@ class SubfinderConfiguration {
         _callback!(key, value, false, false);
     }
 
-    T? getConfig<T>(String key, {T? defaultValue}) {
+    T getConfig<T>(String key, {required T defaultValue}) {
         if (!_config.containsKey(key)) {
             return defaultValue;
         }
@@ -98,12 +100,15 @@ abstract class ISubfinder {
 
     // A subfinder must always provide a way of searching posts.
     Future<List<Post>> searchPosts(String tags, {int limit = 100, int? page});
+    Future<List<Post>> searchPostsAdvanced(String tags, {String optionalTags = "", String blacklist = "", int limit = 100, int? page});
     Future<Post?> getPost(int postID);
 
     Future<List<Comment>> searchComments({int? postID, int limit = 100, int? page});
     Future<Comment?> getComment(int commentID, {int? postID});
     
     Future<List<Note>> getNotes(int postID);
+
+    Future<Description?> getDescription(int postID);
     
     Future<Post?> postGetParent(Post post);
     Future<List<Post>> postGetChildren(Post post);

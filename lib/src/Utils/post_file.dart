@@ -1,8 +1,19 @@
 import 'dart:async';
 import 'dart:typed_data';
 
+import 'package:archive/archive.dart';
+import 'package:async/async.dart';
 import 'package:dio/dio.dart';
+import 'package:http/http.dart' as http;
+import 'package:image/image.dart' as img;
 import 'package:nokufind/src/Utils/utils.dart';
+
+enum PostFileType {
+    image,
+    video,
+    zip,
+    unknown
+}
 
 class PostFileStatus {
     final int contentLength;
@@ -14,11 +25,14 @@ class PostFileStatus {
 
 class PostFile {
     final String url;
+    final String altUrl;
     final String filename;
     Map<String, String> headers;
     final Dio client;
     final Dio fallbackClient;
-    final StreamController<PostFileStatus> _controller = StreamController<PostFileStatus>.broadcast();
+    final Dimensions dimensions;
+    
+    StreamController<PostFileStatus> _controller = StreamController<PostFileStatus>.broadcast();
 
     Uint8List _data = Uint8List(0);
     CancelToken? _cancelToken;
@@ -30,16 +44,31 @@ class PostFile {
     bool _isFetching = false;
     bool _inStream = false;
     bool _completed = false;
+    bool _converted = false;
+
+    static final ZipDecoder _decoder = ZipDecoder();
 
     PostFile({
-        required this.url, 
+        required this.url,
+        String? altUrl,
         required this.filename, 
         required this.headers, 
         required this.client, 
-        required this.fallbackClient
-    });
+        required this.fallbackClient,
+        required this.dimensions
+    }) : altUrl = altUrl ?? url;
 
-    Future<Uint8List?> fetch({bool asStream = false}) async {
+    /// Fetches the file data from the URL.
+    /// 
+    /// This returns a [Future] that will be completed once the fetch is finished.
+    /// Keep in mind that it will return null if an error has occurred.
+    /// 
+    /// Use [asStream] to indicate whether the data should be streamed. 
+    /// You can check more about it on the documentation for [stream]
+    /// 
+    /// Use [fetchLowerQuality] to fetch a lower quality version of the file, if available, which should
+    /// speed up the process.
+    Future<Uint8List?> fetch({bool asStream = false, bool fetchLowerQuality = false}) async {
         // In case that the fetching is already in progress, we want to avoid making more network requests.
         // So we just wait until the current request is done and we return whatever data was received.
         if (_isFetching) {
@@ -47,6 +76,7 @@ class PostFile {
             return data;
         }
 
+        // If we have already completed, we return the data;
         if (_completed) return data;
 
         _isFetching = true;
@@ -76,12 +106,27 @@ class PostFile {
         _isFetching = false;
         _completed = false;
         _inStream = false;
+        _converted = false;
     }
 
     Future<Uint8List?> _fetch() async {
         _inStream = false;
 
-        var response = await _getResponseAsBytes();
+        final tempResponse = await _getResponseAsBytesAlt();
+
+        print("tempResponse null? ${tempResponse == null}");
+
+        if (tempResponse == null) {
+            _completeFetch(failed: true);
+            return null;
+        }
+
+        _data = tempResponse;
+        _completeFetch();
+        
+        return tempResponse;
+
+        /*var response = await _getResponseAsBytes();
 
         // If the response was null, either the request failed or it was cancelled.
         if (response == null) {
@@ -92,13 +137,13 @@ class PostFile {
         _data = response.data ?? _data;
 
         _completeFetch(failed: (response.data != null));
-        return response.data;
+        return response.data;*/
     }
 
     Future<Uint8List?> _fetchAsStream() async {
         _inStream = true;
 
-        var response = await _getResponseAsBody();
+        final response = await _getResponseAsBody();
 
         // If the response was null, either the request failed or it was cancelled.
         if (response == null) {
@@ -107,10 +152,10 @@ class PostFile {
         }
 
         // Since the response type is a stream, we have to manually listen and fetch the byte data from the stream.
-        BytesBuilder totalData = BytesBuilder();
+        final BytesBuilder totalData = BytesBuilder();
 
         try {
-            await for (var data in response.data!.stream) {
+            await for (final data in response.data!.stream) {
                 if (_controller.hasListener) {
                     _controller.sink.add(
                         PostFileStatus(
@@ -134,16 +179,67 @@ class PostFile {
                 return null;
             }
 
-            String expectedData = "Bytes expected: ${(_contentLength == 0) ? 'unknown' : _contentLength}. Bytes received: ${totalData.length}";
+            final String expectedData = "Bytes expected: ${(_contentLength == 0) ? 'unknown' : _contentLength}. Bytes received: ${totalData.length}";
             Nokulog.e("Request for file \"$url\" failed. ($expectedData)", error: e, stackTrace: stackTrace);
             _completeFetch(failed: true);
             return null;
         }
     }
 
+    Future<Uint8List?> _getResponseAsBytesAlt() async {
+        try {
+            final httpClient = http.Client();
+            final request = http.Request("GET", Uri.parse(url));
+
+            request.headers.addAll(headers);
+            
+            final response = httpClient.send(request);
+
+            final stream = response.asStream().listen(null);
+            final data = <int>[];
+
+            const int chunkSize = 1024 * 1024;
+            final Completer<Uint8List?> completer = Completer();
+
+            stream.onData((http.StreamedResponse responseStream) async {
+                final int fileSize = int.tryParse(responseStream.headers['content-length'] ?? '-1') ?? -1;
+                final reader = ChunkedStreamReader(responseStream.stream);
+
+                _fetchCallback(0, fileSize);
+
+                try {
+                    Uint8List buffer;
+                    int size = 0;
+
+                    do {
+                        buffer = await reader.readBytes(chunkSize);
+
+                        data.addAll(buffer);
+                        size += buffer.lengthInBytes;
+
+                        _fetchCallback(size, fileSize);
+                    } while (buffer.length == chunkSize);
+
+                    completer.complete(Uint8List.fromList(data));
+                } catch (e, stackTrace) {
+                    Nokulog.e("Error when downloading.", error: e, stackTrace: stackTrace);
+                    completer.complete(null);
+                } finally {
+                    reader.cancel();
+                    stream.cancel();
+                }
+            });
+
+            return completer.future;
+        } catch (e, stackTrace) {
+            Nokulog.e("Error when downloading.", error: e, stackTrace: stackTrace);
+            return null;
+        }
+    }
+
     Future<Response<Uint8List>?> _getResponseAsBytes() async {
         // We configure the headers and configure the response type to bytes.
-        Options options = Options(
+        final Options options = Options(
             responseType: ResponseType.bytes,
             headers: headers
         );
@@ -165,9 +261,9 @@ class PostFile {
             if (e is DioException) {
                 Nokulog.w("Request failed. Trying fallback client. ${e.message}");
                 if (e.response != null) {
-                    String? possibleWaitTime = e.response!.headers.value("Retry-After");
+                    final String? possibleWaitTime = e.response!.headers.value("Retry-After");
                     if (possibleWaitTime != null) {
-                        int waitTime = int.tryParse(possibleWaitTime) ?? 30;
+                        final int waitTime = int.tryParse(possibleWaitTime) ?? 30;
                         Nokulog.w("Wait time has been set to: $waitTime");
                         if (waitTime >= 3600) {
                             return null;
@@ -195,14 +291,14 @@ class PostFile {
                 return null;
             }
 
-            String possibleMessage = (e is DioException) ? " ${e.message}" : "";
+            final String possibleMessage = (e is DioException) ? " ${e.message}" : "";
             Nokulog.e("Request for file \"$url\" failed.$possibleMessage", error: e, stackTrace: stackTrace);
             return null;
         }
     }
 
     Future<Response<ResponseBody>?> _getResponseAsBody() async {
-        Options options = Options(
+        final Options options = Options(
             responseType: ResponseType.stream,
             headers: headers
         );
@@ -223,9 +319,9 @@ class PostFile {
             if (e is DioException) {
                 Nokulog.w("Request failed. Trying fallback client. ${e.message}");
                 if (e.response != null) {
-                    String? possibleWaitTime = e.response!.headers.value("Retry-After");
+                    final String? possibleWaitTime = e.response!.headers.value("Retry-After");
                     if (possibleWaitTime != null) {
-                        int waitTime = int.tryParse(possibleWaitTime) ?? 30;
+                        final int waitTime = int.tryParse(possibleWaitTime) ?? 30;
                         Nokulog.w("Wait time has been set to: $waitTime");
                         if (waitTime >= 3600) {
                             return null;
@@ -252,7 +348,7 @@ class PostFile {
                 return null;
             }
 
-            String possibleMessage = (e is DioException) ? " ${e.message}" : "";
+            final String possibleMessage = (e is DioException) ? " ${e.message}" : "";
             Nokulog.e("Request for file \"$url\" failed.$possibleMessage", error: e, stackTrace: stackTrace);
             return null;
         }
@@ -283,7 +379,67 @@ class PostFile {
     void _completeFetch({bool failed = false}) {
         _isFetching = false;
         _completed = !failed;
+
         if (!_completer.isCompleted) _completer.complete();
+        
+        _controller.close();
+        _controller = StreamController<PostFileStatus>.broadcast();
+    }
+
+    Future<Uint8List?> convertZipToGIF({bool replace = true, int frameRate = 24}) async {
+        final data = this.data;
+
+        if (converted) return data;
+
+        if (type != PostFileType.zip || data == null) return null;
+
+        final archive = _decoder.decodeBytes(data);
+        final frames = archive
+            .where((entry) => entry.isFile)
+            .map((entry) => entry.readBytes())
+            .whereType<Uint8List>()
+            .toList();
+
+        if (frames.isEmpty) return null;
+
+        final futures = frames.asMap().entries.map((entry) async {
+            final index = entry.key;
+            final cmd = img.Command()..decodeImage(entry.value);
+            final result = await cmd.executeThread();
+        
+            return MapEntry(index, result.outputImage);
+        }).toList();
+
+        final results = await Future.wait(futures);
+        
+        results.sort((a, b) => a.key.compareTo(b.key));
+
+        void setFrameRate(img.Image image) {
+            image.frameDuration = ((1 / frameRate) * 1000).round();
+        }
+
+        final images = results
+            .map((entry) => entry.value)
+            .whereType<img.Image>()
+            .toList()
+            ..forEach(setFrameRate);
+
+        if (images.isEmpty) return null;
+
+        final gifCommand = img.Command()
+            ..image(images.first)
+            ..addFrames(images.length - 1, (index) => images[index + 1])
+            ..encodePng();
+
+        final cmdResult = await gifCommand.executeThread();
+
+        if (replace) {
+            _data = cmdResult.outputBytes ?? Uint8List(0);
+        }
+
+        _converted = true;
+
+        return cmdResult.outputBytes;
     }
 
     /// A broadcast stream that broadcasts ``PostFileStatus`` objects while the data is being fetched.
@@ -324,4 +480,26 @@ class PostFile {
 
     /// Indicates whether the file fetch is currently in progress.
     bool get inProgress => _isFetching;
+
+    /// Indicates there is an actual alternate URL available.
+    bool get hasRealAltUrl => url != altUrl;
+
+    PostFileType get type {
+        final fn = filename.toLowerCase();
+
+        if (fn.endsWith(".mp4") || 
+            fn.endsWith(".webm") || 
+            fn.endsWith(".mkv") || 
+            fn.endsWith(".mov")) {
+            return PostFileType.video;
+        }
+
+        if (fn.endsWith(".zip")) {
+            return PostFileType.zip;
+        }
+
+        return PostFileType.image;
+    }
+
+    bool get converted => _converted;
 }

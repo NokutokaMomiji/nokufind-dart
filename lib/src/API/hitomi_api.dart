@@ -9,9 +9,9 @@ import "package:nokufind/src/Utils/hitomi_utils.dart";
 import "../Utils/utils.dart";
 
 class HitomiAPI {
-    static const String _url = "https://ltn.hitomi.la/";
-    static const String _galleryUrl = "https://ltn.hitomi.la/galleries/";
-    static const List<String> _validTagTypes = ["character", "series", "artist", "group"];
+    static const String _url = "https://ltn.gold-usergeneratedcontent.net/";
+    static const String _galleryUrl = "https://ltn.gold-usergeneratedcontent.net/galleries/";
+    static const List<String> _validTagTypes = ["character", "series", "artist", "group", "type"];
 
     final Dio _client = Dio()..httpClientAdapter = Http2Adapter(ConnectionManager(idleTimeout: const Duration(seconds: 15)));
     static Common? _common;
@@ -28,12 +28,12 @@ class HitomiAPI {
         if (page <= 0) page = 1;
         if (limit <= 0) limit = 100;
 
-        List<String> tagList = [];
-        List<String> splitTags = (tags.isNotEmpty) ? tags.split(" ") : [];
+        final List<String> tagList = [];
+        final List<String> splitTags = (tags.isNotEmpty) ? tags.split(" ") : [];
 
         // We iterate through all the tags to generate the request file path for later.
-        for (String tag in splitTags) {
-            String actualTag = tag.replaceAll("_", " ");
+        for (final String tag in splitTags) {
+            final String actualTag = tag.replaceAll("_", " ");
 
             if (tag.startsWith("female") || tag.startsWith("male")){
                 tagList.add("tag/$actualTag-all.nozomi");
@@ -41,15 +41,15 @@ class HitomiAPI {
             }
 
             if (tag.startsWith("language")) {
-                String language = tag.split(":").last;
+                final String language = tag.split(":").last;
 
                 tagList.add("index-$language.nozomi");
                 continue;
             }
 
-            List<String> splitTag = actualTag.split(":");
-            String tagType = splitTag.first;
-            String tagValue = splitTag.last;
+            final List<String> splitTag = actualTag.split(":");
+            final String tagType = splitTag.first;
+            final String tagValue = splitTag.last;
 
             if (_validTagTypes.contains(tagType)) {
                 tagList.add("$tagType/$tagValue-all.nozomi");
@@ -69,13 +69,13 @@ class HitomiAPI {
         Nokulog.d(tagList);
 
 
-        var oldHeaders = Map<String, dynamic>.from(_client.options.headers);        
+        final oldHeaders = Map<String, dynamic>.from(_client.options.headers);        
         _client.options.responseType = ResponseType.bytes;
 
-        Map<String, List<int>> results = {};
+        final Map<String, List<int>> results = {};
 
-        int byteStart = (page - 1) * limit * 4;
-        int byteEnd = byteStart + limit * 4 - 1;
+        final int byteStart = (page - 1) * limit * 4;
+        final int byteEnd = byteStart + limit * 4 - 1;
 
         _client.options.headers["Range"] = "bytes=$byteStart-";
 
@@ -86,10 +86,10 @@ class HitomiAPI {
 
         Nokulog.d(_client.options.headers["Range"]);
 
-        Executor tagExecutor = Executor(concurrency: 15);
+        final Executor tagExecutor = Executor(concurrency: 15);
 
         // We go through all the tags in the search query and collect the posts of the page.
-        for (String tag in tagList) {
+        for (final String tag in tagList) {
             if (!results.containsKey(tag)) {
                 results[tag] = [];
             }
@@ -97,25 +97,25 @@ class HitomiAPI {
             tagExecutor.scheduleTask(() async {
                 try {
                     Nokulog.d("Requesting $_url$tag");
-                    Response<Uint8List> response = await _client.get("$_url$tag");
+                    final Response<Uint8List> response = await _client.get("$_url$tag");
 
                     Nokulog.d("Response: ${response.statusCode}");
-                    Uint8List? data = response.data;
+                    final Uint8List? data = response.data;
 
                     if (data == null) {
                         Nokulog.e("Data for tag \"$tag\" was null.");
                         return null;
                     }
 
-                    int totalItems = data.length ~/ 4;
+                    final int totalItems = data.length ~/ 4;
 
                     if (totalItems == 0) {
                         return null;
                     }
 
-                    var buffer = ByteData.sublistView(data);
+                    final buffer = ByteData.sublistView(data);
                     for (int i = 0; i < totalItems; i++) {
-                        int value = buffer.getInt32(i * 4);
+                        final int value = buffer.getInt32(i * 4);
                         results[tag]!.add(value);
                     }
 
@@ -145,16 +145,16 @@ class HitomiAPI {
             return [];
         }
 
-        List<Map<String, dynamic>> posts = [];
+        final List<Map<String, dynamic>> posts = [];
 
         _client.options.headers = oldHeaders;
         _client.options.responseType = ResponseType.plain;
 
-        Executor executor = Executor(concurrency: 15);
+        final Executor executor = Executor(concurrency: 15);
 
-        for (int id in filteredPosts) {
+        for (final int id in filteredPosts) {
             executor.scheduleTask(() async {
-                var result = await getPost(id);
+                final result = await getPost(id);
                 if (result == null) return;
                 posts.add(result);
             });
@@ -179,8 +179,8 @@ class HitomiAPI {
         try {
             _client.options.responseType = ResponseType.plain;
 
-            Response<String> response = await _client.get("$_galleryUrl$postID.js");
-            String? rawData = response.data;
+            final Response<String> response = await _client.get("$_galleryUrl$postID.js");
+            final String? rawData = response.data;
             
             if (rawData == null || !rawData.contains("var galleryinfo = ")) {
                 Nokulog.e("Either rawData is null or it doesn't contain valid info.");
@@ -188,37 +188,37 @@ class HitomiAPI {
             }
 
             jsonData = jsonDecode(rawData.replaceAll("var galleryinfo = ", ""));
-            List<HitomiFile> files = (jsonData["files"] as List<dynamic>).map((element) => HitomiFile.fromJson(postID, Map<String, dynamic>.from(element))).toList();
+            final List<HitomiFile> files = (jsonData["files"] as List<dynamic>).map((element) => HitomiFile.fromJson(postID, Map<String, dynamic>.from(element))).toList();
 
             //Nokulog.d(jsonEncode(jsonData));
             //Nokulog.d("======================================");
 
-            String? videoUrl = jsonData["video"];
+            final String? videoUrl = jsonData["video"];
 
             if (_common == null) {
                 await configureCommon();
             }
 
-            List<String> images = [];
-            List<String> hashes = [];
-            List<List<int>> dimensions = [];
+            final List<String> images = [];
+            final List<String> hashes = [];
+            final List<List<int>> dimensions = [];
 
-            for (var file in files) {
+            for (final file in files) {
                 //images.add(_common!.urlFromUrlFromHash(postID.toString(), file, "webp", "", "a"));
                 images.add(_common!.imageUrlFromImage(postID.toString(), file, preferWebp: preferWebp));
                 hashes.add(file.hash);
                 dimensions.add([file.width, file.height]);
             }
 
-            List<String> tags = [
+            final List<String> tags = [
                 if (jsonData["language"] != null) "language:${jsonData["language"]}"
             ];
 
-            for (var tag in (jsonData["tags"] as List)) {
-                var currentTag = Map<String, dynamic>.from(tag);
+            for (final tag in (jsonData["tags"] as List)) {
+                final currentTag = Map<String, dynamic>.from(tag);
                 
-                String? male = (currentTag["male"] is int) ? currentTag["male"].toString() : currentTag["male"];
-                String? female = (currentTag["female"] is int) ? currentTag["female"].toString() : currentTag["female"];
+                final String? male = (currentTag["male"] is int) ? currentTag["male"].toString() : currentTag["male"];
+                final String? female = (currentTag["female"] is int) ? currentTag["female"].toString() : currentTag["female"];
 
                 String gender = "tag:";
                 
@@ -229,38 +229,45 @@ class HitomiAPI {
                 tags.add("$gender${currentTag['tag']!.replaceAll(' ', '_')}");
             }
 
-            List<dynamic>? artists = jsonData["artists"];
-            List<dynamic>? characters = jsonData["characters"];
-            List<dynamic>? parodies = jsonData["parodys"];
+            final List<dynamic>? artists = jsonData["artists"];
+            final List<dynamic>? characters = jsonData["characters"];
+            final List<dynamic>? parodies = jsonData["parodys"];
             
-            List<String> artistNames = [];
+            final List<String> artistNames = [];
+            final List<String> artistTags = [];
+            final List<String> characterTags = [];
+            final List<String> parodyTags = [];
+            
             if (artists != null) {
-                for (var artist in artists) {
-                    tags.add("artist:${artist["artist"].replaceAll(" ", "_")}");
-                    artistNames.add(artist["artist"].replaceAll(" ", "_"));
+                for (final artist in artists) {
+                    artistTags.add("artist:${artist["artist"].replaceAll(" ", "_")}");
+                    artistNames.add(artist["artist"]);
                 }
             }
 
             if (characters != null) {
-                for (var character in characters) {
-                    tags.add("character:${character["character"].replaceAll(" ", "_")}");
+                for (final character in characters) {
+                    characterTags.add("character:${character["character"].replaceAll(" ", "_")}");
                 }
             }
 
             if (parodies != null) {
-                for (var parody in parodies) {
-                    tags.add("series:${parody["parody"].replaceAll(" ", "_")}");
+                for (final parody in parodies) {
+                    parodyTags.add("series:${parody["parody"].replaceAll(" ", "_")}");
                 }
             }
 
-            Map<String, dynamic> result = {
+            final Map<String, dynamic> result = {
                 "postID": (jsonData.containsKey("id") && jsonData["id"] != null) ? ((jsonData["id"] is String) ? int.tryParse(jsonData["id"]) : jsonData["id"]) : postID,
                 "title": jsonData["title"],
                 "images": (videoUrl == null) ? images : ["https:$videoUrl"],
                 "tags": tags,
+                "artists": artistTags,
+                "characters": characterTags,
+                "parodies": parodyTags,
                 "dimensions": dimensions,
                 "hashes": hashes,
-                "artists": artistNames,
+                "authors": artistNames,
                 "preview": _common!.getThumbnail(postID.toString(), files.first)
             };
 
@@ -289,8 +296,8 @@ class HitomiAPI {
     Future<void> configureCommon() async {
         for (int i = 0; i < 10; i++) {
             try {
-                Response<String> ggreq = await _client.get(
-                    "https://ltn.hitomi.la/gg.js",
+                final Response<String> ggreq = await _client.get(
+                    "https://ltn.gold-usergeneratedcontent.net/gg.js",
                     options: Options(
                         responseType: ResponseType.plain
                     )

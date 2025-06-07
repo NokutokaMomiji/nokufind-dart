@@ -33,10 +33,10 @@ class Comment {
     }
 
     String bodyToMarkdown() {
-        return html2md.convert(_commentData['body'].replaceAll("[quote]", "[blockquote]").replaceAll("[/quote]", "[/blockquote]"));
+        return html2md.convert(_commentData['body'].replaceAll("\n", "<br>"));
     }
 
-    int operator [](String key) {
+    dynamic operator [](String key) {
         return _commentData[key];
     }
 

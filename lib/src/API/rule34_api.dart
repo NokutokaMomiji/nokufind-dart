@@ -27,7 +27,7 @@ class Rule34API {
         if (page < 0) page = 0;
         if (limit <= 0) limit = 1000;
         
-        Map<String, String> params = {
+        final Map<String, String> params = {
             "page": "dapi",
             "s": "post",
             "q": "index",
@@ -38,19 +38,19 @@ class Rule34API {
         };
 
         try {
-            List<dynamic> results = await _makeRequest("index.php", params: params) as List<dynamic>;
+            final List<dynamic> results = await _makeRequest("index.php", params: params) as List<dynamic>;
             
             if (results.isEmpty) return const [];
 
-            Executor executor = Executor(concurrency: 30);
+            final Executor executor = Executor(concurrency: 30);
 
             for (int i = 0; i < results.length; i++) {
                 results[i] = Map<String, dynamic>.from(results[i]);
 
                 executor.scheduleTask(() async {
-                    var tags = (_unescape.convert(results[i]["tags"] as String)).split(" ");
-                    var source = (results[i]["source"] as String);
-                    var sources = (source.isNotEmpty) ? source.split(" ") : <String>[]; 
+                    final tags = (_unescape.convert(results[i]["tags"] as String)).split(" ");
+                    final source = (results[i]["source"] as String);
+                    final sources = (source.isNotEmpty) ? source.split(" ") : <String>[]; 
 
                     results[i]["tags"] = tags;
                     results[i]["sources"] = sources;
@@ -68,7 +68,7 @@ class Rule34API {
     }
 
     Future<Map<String, dynamic>?> getPost(int postID) async {
-        Map<String, String> params = {
+        final Map<String, String> params = {
             "page": "dapi",
             "s": "post",
             "q": "index",
@@ -77,14 +77,14 @@ class Rule34API {
         };
 
         try {
-            List<dynamic> results = await _makeRequest("index.php", params: params) as List<dynamic>;
+            final List<dynamic> results = await _makeRequest("index.php", params: params) as List<dynamic>;
             
-            for (int i = 0; i < results.length;) {
+            for (final int i = 0; i < results.length;) {
                 results[i] = Map<String, dynamic>.from(results[i]);
 
-                var tags = (_unescape.convert(results[i]["tags"] as String)).split(" ");
-                var source = (results[i]["source"] as String);
-                var sources = (source.isNotEmpty) ? source.split(" ") : <String>[];
+                final tags = (_unescape.convert(results[i]["tags"] as String)).split(" ");
+                final source = (results[i]["source"] as String);
+                final sources = (source.isNotEmpty) ? source.split(" ") : <String>[];
 
                 results[i]["tags"] = tags;
                 results[i]["sources"] = sources;
@@ -104,7 +104,7 @@ class Rule34API {
         if (page <= 0) page = 1;
         if (limit <= 0) limit = 100;
         
-        Map<String, String> params = {
+        final Map<String, String> params = {
             "limit": limit.toString(),
             "pid": page.toString()
         };
@@ -113,20 +113,20 @@ class Rule34API {
         params["s"] = "comment";
         params["q"] = "index";
 
-        List<Map<String, dynamic>> rawComments = [];
+        final List<Map<String, dynamic>> rawComments = [];
 
         if (postID != null) {
             params["post_id"] = postID.toString();
         }
 
-        String paramString = mapToPairedString(params);
-        Uri requestURL = Uri.parse("${_url}index.php?$paramString");
+        final String paramString = mapToPairedString(params);
+        final Uri requestURL = Uri.parse("${_url}index.php?$paramString");
         
-        Response<String> content = await _client.get(requestURL.toString());
+        final Response<String> content = await _client.get(requestURL.toString());
     
-        XmlDocument document = XmlDocument.parse(content.data!);
+        final XmlDocument document = XmlDocument.parse(content.data!);
 
-        for (var child in document.rootElement.children) {
+        for (final child in document.rootElement.children) {
             rawComments.add({
                 "created_at": DateTime.parse(child.getAttribute("created_at") as String),
                 "post_id": int.parse(child.getAttribute("post_id") as String),
@@ -145,7 +145,7 @@ class Rule34API {
             return null;
         }
 
-        var rawComments = await searchComments(postID: postID);
+        final rawComments = await searchComments(postID: postID);
 
         try {
             return rawComments.firstWhere((element) => element["id"] == commentID);
@@ -159,45 +159,45 @@ class Rule34API {
             return List.empty();
         }
 
-        Map<String, String> cookies = {
+        final Map<String, String> cookies = {
             "resize-notification": "1",
             "resize-original": "1"
         };
 
-        Map<String, String> params = {
+        final Map<String, String> params = {
             "page": "post",
             "s": "view",
             "id": postID.toString()
         };
 
-        List<Map<String, dynamic>> rawNotes = [];
+        final List<Map<String, dynamic>> rawNotes = [];
 
-        String paramString = mapToPairedString(params);
-        Uri requestURL = Uri.parse("${_siteUrl}index.php?$paramString");
-        Uri otherURL = Uri.parse("${_siteUrl}index.php?page=history&type=page_notes&id=$postID");
+        final String paramString = mapToPairedString(params);
+        final Uri requestURL = Uri.parse("${_siteUrl}index.php?$paramString");
+        final Uri otherURL = Uri.parse("${_siteUrl}index.php?page=history&type=page_notes&id=$postID");
 
         _client.options.headers["cookies"] = mapToPairedString(cookies, separator: ';');        
         
         try {
             _client.options.headers["User-Agent"] = userAgent;
-            Response<String> content = await _client.get(requestURL.toString());
-            Response<String> otherData = await _client.get(otherURL.toString());
+            final Response<String> content = await _client.get(requestURL.toString());
+            final Response<String> otherData = await _client.get(otherURL.toString());
             _client.options.headers.remove("User-Agent");
 
-            Document document = parse(content.data!);
-            Document otherDoc = parse(otherData.data!);
+            final Document document = parse(content.data!);
+            final Document otherDoc = parse(otherData.data!);
 
-            Element? noteContainer = document.getElementById("note-container");
+            final Element? noteContainer = document.getElementById("note-container");
 
             if (noteContainer == null) return [];
             
             for (var i = 0; i < noteContainer.children.length; i += 2) {
-                Element noteBox = noteContainer.children[i];
+                final Element noteBox = noteContainer.children[i];
                 //Element noteBody = noteContainer.children[i + 1];
 
-                var splitStyle = pairedStringToMap(noteBox.attributes["style"] as String, separator: "; ", unifier: ": ");
+                final splitStyle = pairedStringToMap(noteBox.attributes["style"] as String, separator: "; ", unifier: ": ");
 
-                Map<String, dynamic> currentNote = {
+                final Map<String, dynamic> currentNote = {
                     "x": int.parse(splitStyle["left"]?.replaceAll("px", "") as String),
                     "y": int.parse(splitStyle["top"]?.replaceAll("px", "") as String),
                     "width": int.parse(splitStyle["width"]?.replaceAll("px", "") as String),
@@ -208,12 +208,12 @@ class Rule34API {
                 rawNotes.add(currentNote);
             }
 
-            var antigraph = "¶";
-            Element tcontent = otherDoc.querySelector("tbody") as Element;
-            for (var note in rawNotes.indexed) {        
+            final antigraph = "¶";
+            final Element tcontent = otherDoc.querySelector("tbody") as Element;
+            for (final note in rawNotes.indexed) {        
                 try {
-                    int index = (note.$1 + 1).clamp(0, tcontent.children.length - 1);
-                    List<Element> tableData = tcontent.children[index].children;
+                    final int index = (note.$1 + 1).clamp(0, tcontent.children.length - 1);
+                    final List<Element> tableData = tcontent.children[index].children;
                     note.$2["id"] = int.parse(tableData[2].children[0].text.trim());
                     note.$2["body"] = tableData[3].innerHtml.trim().replaceAll(antigraph, "\n");
                     note.$2["created_at"] = _dateFormat.parse(tableData[5].text);
@@ -233,10 +233,10 @@ class Rule34API {
     }
 
     Future<dynamic> _makeRequest(String file, {Map<String, String>? params}) async {
-        String paramString = (params != null) ? mapToPairedString(params) : "";
-        Uri requestURL = Uri.parse("$_url$file?$paramString");
+        final String paramString = (params != null) ? mapToPairedString(params) : "";
+        final Uri requestURL = Uri.parse("$_url$file?$paramString");
         
-        Response<String> response = await _client.get(requestURL.toString());
+        final Response<String> response = await _client.get(requestURL.toString());
         
         if (response.data == null) {
             throw DioException(

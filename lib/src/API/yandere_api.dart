@@ -7,13 +7,13 @@ import "package:intl/intl.dart";
 
 import "../Utils/utils.dart";
 
-class KonachanAPI {
-    static const String _url = "https://konachan.com/";
+class YandereAPI {
+    static const String _url = "https://yande.re/";
 
     final Dio _client = Dio()..httpClientAdapter = Http2Adapter(ConnectionManager(idleTimeout: const Duration(seconds: 15)));
     final _dateFormat = DateFormat("EEE MMM dd HH:mm:ss yyyy");
 
-    KonachanAPI() {
+    YandereAPI() {
         addSmartRetry(_client);
     }
 
@@ -21,17 +21,17 @@ class KonachanAPI {
         if (page <= 0) page = 1;
         if (limit <= 0) limit = 100;
         
-        Map<String, String> params = {
+        final Map<String, String> params = {
             "tags": tags,
             "limit": limit.toString(),
             "page": page.toString()
         };
 
         try {
-            List<dynamic> results = await _makeRequest("post.json", params: params) as List<dynamic>;
+            final List<dynamic> results = await _makeRequest("post.json", params: params) as List<dynamic>;
             
             for (int i = 0; i < results.length; i++) {
-                var map = Map<String, dynamic>.from(results[i]);
+                final map = Map<String, dynamic>.from(results[i]);
                 map["rating"] = (map["rating"] == "s") ? "general" : map["rating"];
                 results[i] = map;
             }
@@ -44,7 +44,7 @@ class KonachanAPI {
 
     Future<Map<String, dynamic>?> getPost(int postID) async {
         try {
-            var result = await searchPosts("id:$postID");
+            final result = await searchPosts("id:$postID");
             if (result.isEmpty) {
                 return null;
             }
@@ -58,26 +58,29 @@ class KonachanAPI {
         if (page <= 0) page = 1;
         if (limit <= 0) limit = 100;
         
-        Map<String, String> params = {
+        final Map<String, String> params = {
             "limit": limit.toString(),
             "page": page.toString()
         };
 
-        String url = (postID == null) ? "${_url}comment" : "${_url}post/show/$postID";
+        final String url = (postID == null) ? "${_url}comment" : "${_url}post/show/$postID";
 
-        Response<String> response = await _client.get(Uri.parse(url).toString(), queryParameters: params);
-        var document = parse(response.data!);
-        var rawComments = document.getElementsByClassName("comment avatar-container");
+        _client.options.headers = params;
+        final Response<String> response = await _client.get(Uri.parse(url).toString());
+        _client.options.headers = null;
 
-        List<Map<String, dynamic>> results = [];
+        final document = parse(response.data!);
+        final rawComments = document.getElementsByClassName("comment avatar-container");
 
-        for (var element in rawComments) {
-            var innerElement = parse(element.outerHtml);
-            var dateObject = innerElement.getElementsByClassName("date").first;
-            var authorObject = innerElement.getElementsByClassName("author").first.children.first.children.first;
-            var avatar = innerElement.getElementsByClassName("avatar");
+        final List<Map<String, dynamic>> results = [];
 
-            Map<String, dynamic> comment = {
+        for (final element in rawComments) {
+            final innerElement = parse(element.outerHtml);
+            final dateObject = innerElement.getElementsByClassName("date").first;
+            final authorObject = innerElement.getElementsByClassName("author").first.children.first.children.first;
+            final avatar = innerElement.getElementsByClassName("avatar");
+
+            final Map<String, dynamic> comment = {
                 "id": int.parse(element.id.replaceAll("c", "")),
                 "post_id": int.parse(dateObject.children.first.attributes["href"]!.split("/").last.split("#").first),
                 "creator": authorObject.innerHtml.trim(),
@@ -87,6 +90,7 @@ class KonachanAPI {
                 "created_at": _dateFormat.parseLoose((dateObject.attributes["title"] as String).replaceAll("Posted at", "").trim())
             };
 
+            Nokulog.d(comment);
             results.add(comment);
         }
 
@@ -98,7 +102,7 @@ class KonachanAPI {
             return null;
         }
         
-        Map<String, String> params = {
+        final Map<String, String> params = {
             "id": commentID.toString()
         };
 
@@ -115,7 +119,7 @@ class KonachanAPI {
         }
 
         try {
-            List<dynamic> results = await _makeRequest("note.json", params: { "post_id": postID.toString() }) as List<dynamic>;
+            final List<dynamic> results = await _makeRequest("note.json", params: { "post_id": postID.toString() }) as List<dynamic>;
         
             for (int i = 0; i < results.length; i++) {
                 results[i] = Map<String, dynamic>.from(results[i]);
@@ -128,9 +132,10 @@ class KonachanAPI {
     }
 
     Future<dynamic> _makeRequest(String file, {Map<String, String>? params}) async {
-        String paramString = (params != null) ? mapToPairedString(params) : "";
+        final String paramString = (params != null) ? mapToPairedString(params) : "";
+        final Uri requestURL = Uri.parse("$_url$file?$paramString");
         
-        Response<String> response = await _client.get("$_url$file?$paramString");
+        final Response<String> response = await _client.get(requestURL.toString());
 
         if (response.data == null) {
             throw DioException(

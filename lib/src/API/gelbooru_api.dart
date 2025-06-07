@@ -21,6 +21,8 @@ class GelbooruAPI {
     final _commentIDExpr = RegExp(r"(?<=#)\d+");
     final _commentBodyExpr = RegExp(r"(?<=<br><br>)(.*?)(?=<br><br>)");
 
+    CancelToken? _token;
+
     GelbooruAPI() {
         addSmartRetry(_client);
     }
@@ -29,7 +31,7 @@ class GelbooruAPI {
         if (page < 0) page = 0;
         if (limit <= 0) limit = 1000;
         
-        Map<String, String> params = {
+        final Map<String, String> params = {
             "page": "dapi",
             "s": "post",
             "q": "index",
@@ -40,14 +42,14 @@ class GelbooruAPI {
         };
 
         try {
-            var contentMap = await _makeRequest("index.php", params: params) as Map<String, dynamic>;
+            final contentMap = await _makeRequest("index.php", params: params) as Map<String, dynamic>;
             
             if (!contentMap.containsKey("post")) {
                 Nokulog.e("Didn't find key with name post for index.php?${mapToPairedString(params)}.");
                 return [];
             }
             
-            List<dynamic> results = contentMap["post"];
+            final List<dynamic> results = contentMap["post"];
             
             for (int i = 0; i < results.length; i++) {
                 results[i] = Map<String, dynamic>.from(results[i]);
@@ -61,7 +63,7 @@ class GelbooruAPI {
     }
 
     Future<Map<String, dynamic>?> getPost(int postID) async {
-        Map<String, String> params = {
+        final Map<String, String> params = {
             "page": "dapi",
             "s": "post",
             "q": "index",
@@ -70,8 +72,8 @@ class GelbooruAPI {
         };
 
         try {
-            var response = await _makeRequest("index.php", params: params);
-            Map<String, dynamic> data = response as Map<String, dynamic>;
+            final response = await _makeRequest("index.php", params: params);
+            final Map<String, dynamic> data = response as Map<String, dynamic>;
 
             if (!data.containsKey("post")) return null;
 
@@ -85,7 +87,7 @@ class GelbooruAPI {
         if (page <= 0) page = 1;
         if (limit <= 0) limit = 100;
         
-        Map<String, String> params = {
+        final Map<String, String> params = {
             "limit": limit.toString(),
             "pid": ((page - 1) * 10).toString()
         };
@@ -95,7 +97,7 @@ class GelbooruAPI {
         params["s"] = "list";
         params["q"] = "index";
 
-        List<Map<String, dynamic>> rawComments = [];
+        final List<Map<String, dynamic>> rawComments = [];
 
         if (postID != null) {
             params["page"] = "post";
@@ -104,41 +106,41 @@ class GelbooruAPI {
             params["id"] = postID.toString();
         }
 
-        String paramString = mapToPairedString(params);
-        Uri requestURL = Uri.parse("${_url}index.php?$paramString");
+        final String paramString = mapToPairedString(params);
+        final Uri requestURL = Uri.parse("${_url}index.php?$paramString");
         
-        Response<String> content = await _client.get(requestURL.toString());
+        final Response<String> content = await _client.get(requestURL.toString());
     
-        Document document = Document.html(content.data!);
+        final Document document = Document.html(content.data!);
 
-        var comments = (postID == null) ? document.getElementsByClassName("commentHeader") : document.getElementsByClassName("commentBody");
-        var otherData = document.getElementsByClassName("commentThumbnail");
+        final comments = (postID == null) ? document.getElementsByClassName("commentHeader") : document.getElementsByClassName("commentBody");
+        final otherData = document.getElementsByClassName("commentThumbnail");
         int index = 0;
 
-        for (var comment in comments) {
-            Map<String, dynamic> commentData = {};
-            var subdocument = Document.html(comment.innerHtml);
+        for (final comment in comments) {
+            final Map<String, dynamic> commentData = {};
+            final subdocument = Document.html(comment.innerHtml);
 
             if (postID == null) {
-                var commentThumbnail = otherData[index];
-                var commentPostLink = commentThumbnail.children.first.attributes["href"] as String;
+                final commentThumbnail = otherData[index];
+                final commentPostLink = commentThumbnail.children.first.attributes["href"] as String;
                 commentData["post_id"] = int.parse(commentPostLink.split("=").last);
             } else {
                 commentData["post_id"] = postID;
             }
 
-            var commentAvatar = (postID == null) ? subdocument.getElementsByClassName("profileAvatar").first.outerHtml : document.getElementsByClassName("commentAvatar")[index].children.first.outerHtml;
-            var commentBody = (postID == null) ? subdocument.getElementsByClassName("commentBody").first : document.getElementsByClassName("commentBody")[index];
+            final commentAvatar = (postID == null) ? subdocument.getElementsByClassName("profileAvatar").first.outerHtml : document.getElementsByClassName("commentAvatar")[index].children.first.outerHtml;
+            final commentBody = (postID == null) ? subdocument.getElementsByClassName("commentBody").first : document.getElementsByClassName("commentBody")[index];
 
-            var profileMatch = _profileExpr.firstMatch(commentAvatar);
+            final profileMatch = _profileExpr.firstMatch(commentAvatar);
             commentData["creator_avatar"] = (profileMatch != null) ? "$_url${profileMatch[0]}" : null;
 
-            var profileLink = commentBody.children.first;
+            final profileLink = commentBody.children.first;
 
             commentData["creator_id"] = int.parse((profileLink.attributes["href"] as String).split("=").last);
             commentData["creator"] = profileLink.children.first.innerHtml.trim();
 
-            var commentContent = commentBody.innerHtml.split("\n")[1].trim();
+            final commentContent = commentBody.innerHtml.split("\n")[1].trim();
 
             commentData["id"] = int.parse(_commentIDExpr.firstMatch(commentContent)?[0] as String);
             commentData["created_at"] = _dateFormat.parse(_commentDateExpr.firstMatch(commentContent)?[0] as String);
@@ -156,7 +158,7 @@ class GelbooruAPI {
             return null;
         }
 
-        var rawComments = await searchComments(postID: postID);
+        final rawComments = await searchComments(postID: postID);
 
         try {
             return rawComments.firstWhere((element) => element["id"] == commentID);
@@ -170,23 +172,23 @@ class GelbooruAPI {
             return List.empty();
         }
 
-        List<Map<String, dynamic>> rawNotes = [];
+        final List<Map<String, dynamic>> rawNotes = [];
 
-        Map<String, String> params = {
+        final Map<String, String> params = {
             "page": "dapi",
             "s": "note",
             "q": "index",
             "post_id": postID.toString()
         };
 
-        String paramString = mapToPairedString(params);
-        Uri requestURL = Uri.parse("${_url}index.php?$paramString");
+        final String paramString = mapToPairedString(params);
+        final Uri requestURL = Uri.parse("${_url}index.php?$paramString");
         
-        Response<String> content = await _client.get(requestURL.toString());
+        final Response<String> content = await _client.get(requestURL.toString());
     
-        XmlDocument document = XmlDocument.parse(content.data!);
+        final XmlDocument document = XmlDocument.parse(content.data!);
 
-        for (var note in document.rootElement.children) {
+        for (final note in document.rootElement.children) {
             rawNotes.add({
                 "id": int.parse(note.getAttribute("id") as String),
                 "created_at": _noteDateFormat.parse(note.getAttribute("created_at") as String),
@@ -202,15 +204,23 @@ class GelbooruAPI {
         return rawNotes;
     }
 
+    void cancel() {
+        _token?.cancel();
+    }
+
     Future<dynamic> _makeRequest(String file, {Map<String, String>? params}) async {
-        String paramString = (params != null) ? mapToPairedString(params) : "";
-        Uri requestURL = Uri.parse("$_url$file?$paramString");
+        final String paramString = (params != null) ? mapToPairedString(params) : "";
+        final Uri requestURL = Uri.parse("$_url$file?$paramString");
 
         Nokulog.d(requestURL);
-        
-        Response<String> response = await _client.get(requestURL.toString());
 
-        if (response.data == null) {
+        _token = CancelToken();
+
+        final Response<String> response = await _client.get(requestURL.toString(), cancelToken: _token);
+
+        final data = response.data;
+
+        if (data == null) {
             throw DioException(
                 requestOptions: response.requestOptions,
                 response: response,
@@ -218,6 +228,14 @@ class GelbooruAPI {
             );
         }
 
-        return jsonDecode(response.data!);
+        if (data.isEmpty) {
+            throw DioException(
+                requestOptions: response.requestOptions,
+                response: response,
+                message: "Response data was empty"
+            );
+        }
+
+        return jsonDecode(data);
     }
 }

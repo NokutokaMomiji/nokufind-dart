@@ -17,14 +17,14 @@ class DanbooruAPI {
         if (page <= 0) page = 1;
         if (limit <= 0) limit = 200;
         
-        Map<String, String> params = {
+        final Map<String, String> params = {
             "tags": tags,
             "limit": limit.toString(),
             "page": page.toString()
         };
 
         try {
-            List<dynamic> results = await _makeRequest("posts.json", params: params) as List<dynamic>;
+            final List<dynamic> results = await _makeRequest("posts.json", params: params) as List<dynamic>;
             
             for (int i = 0; i < results.length; i++) {
                 results[i] = Map<String, dynamic>.from(results[i]);
@@ -50,7 +50,7 @@ class DanbooruAPI {
         if (page <= 0) page = 1;
         if (limit <= 0) limit = 100;
         
-        Map<String, String> params = {
+        final Map<String, String> params = {
             "limit": limit.toString(),
             "page": page.toString()
         };
@@ -59,7 +59,7 @@ class DanbooruAPI {
             if (postID != null) {
                 params["search[post_id]"] = postID.toString();
             }
-            List<dynamic> results = await _makeRequest("comments.json", params: params) as List<dynamic>;
+            final List<dynamic> results = await _makeRequest("comments.json", params: params) as List<dynamic>;
 
             for (int i = 0; i < results.length; i++) {
                 results[i] = Map<String, dynamic>.from(results[i]);
@@ -92,7 +92,7 @@ class DanbooruAPI {
         }
 
         try {
-            List<dynamic> results = await _makeRequest("notes.json", params: { "search[post_id]": postID.toString() }) as List<dynamic>;
+            final List<dynamic> results = await _makeRequest("notes.json", params: { "search[post_id]": postID.toString() }) as List<dynamic>;
         
             for (int i = 0; i < results.length; i++) {
                 results[i] = Map<String, dynamic>.from(results[i]);
@@ -105,14 +105,35 @@ class DanbooruAPI {
         }
     }
 
+    Future<Map<String, dynamic>?> getDescription(int postID) async {
+        if (postID <= 0) {
+            return null;
+        }
+        
+        try {
+            return await _makeRequest("posts/$postID/artist_commentary.json") as Map<String, dynamic>;
+        } catch (e, stackTrace) {
+            if (e is DioException) {
+                // This means that the commentary simply didn't exist.
+                // There's no real reason to log the error, I think, since it's expected.
+                if (e.response?.statusCode == 404) {
+                    return null;
+                }
+            }
+
+            Nokulog.e("Failed to fetch description for post ID $postID.", error: e, stackTrace: stackTrace);
+            return null;
+        }
+    }
+
     Future<dynamic> _makeRequest(String file, {Map<String, String>? params}) async {
-        String paramString = (params != null) ? mapToPairedString(params) : "";
-        Uri requestURL = Uri.parse("$_url$file?$paramString");
+        final String paramString = (params != null) ? mapToPairedString(params) : "";
+        final Uri requestURL = Uri.parse("$_url$file?$paramString");
         Nokulog.d(requestURL.toString());
         
         _client.options.validateStatus = (status) => true;
         _client.options.headers["User-Agent"] = userAgent;
-        Response<String> response = await _client.get(requestURL.toString());
+        final Response<String> response = await _client.get(requestURL.toString());
 
         if (response.data == null) {
             throw DioException(

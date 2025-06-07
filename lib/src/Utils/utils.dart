@@ -167,8 +167,41 @@ class Nokulog {
     }
 }
 
+class Dimensions {
+    final int x;
+    final int y;
+    final Dimensions? alt;
+
+    Dimensions(this.x, this.y, {this.alt});
+
+    factory Dimensions.fromList(List<int> dimensions) {
+        return Dimensions(dimensions[0], dimensions[1]);
+    }
+
+    factory Dimensions.fromMap(Map<String, dynamic> dimensions) {
+        return Dimensions(
+            dimensions["x"] as int,
+            dimensions["y"] as int,
+            alt: (dimensions["alt"] == null) ? null : Dimensions.fromMap(dimensions["alt"])
+        );
+    }
+
+    Map<String, dynamic> toMap() => {
+        "x": x,
+        "y": y,
+        "alt": alt?.toMap()
+    };
+
+    @override
+    String toString() {
+        return "${x}x$y";
+    }
+
+    double get ratio => x / y;
+}
+
 String mapToPairedString(Map<dynamic, dynamic> map, {String separator = '&', String unifier = '='}) {
-    List<String> pairs = [];
+    final List<String> pairs = [];
 
     map.forEach((key, value) {
         pairs.add("$key$unifier$value");
@@ -178,10 +211,10 @@ String mapToPairedString(Map<dynamic, dynamic> map, {String separator = '&', Str
 }
 
 Map<String, String> pairedStringToMap(String str, {String separator = '&', String unifier = '='}) {
-    Map<String, String> pairs = {};
+    final Map<String, String> pairs = {};
 
     str.split(separator).forEach((element) {
-        var elementSplit = element.split(unifier);
+        final elementSplit = element.split(unifier);
 
         if (elementSplit.length < 2) return;
 
@@ -193,11 +226,11 @@ Map<String, String> pairedStringToMap(String str, {String separator = '&', Strin
 
 List<String> parseTags(String tags) {
     String currentText = "";
-    List<String> tagList = [];
+    final List<String> tagList = [];
     int numOfParenthesis = 0;
 
     for (int index = 0; index < tags.length; index++) {
-        var char = tags[index];
+        final char = tags[index];
         if (char == " " && numOfParenthesis == 0) {
             tagList.add(currentText);
             currentText = "";
@@ -219,11 +252,11 @@ List<String> parseTags(String tags) {
 
 List<String> parseTagsWithQuotes(String tags, {bool includeQuotes = false}) {
     String currentText = "";
-    List<String> tagList = [];
+    final List<String> tagList = [];
     bool inQuotations = false;
 
     for (int index = 0; index < tags.length; index++) {
-        var char = tags[index];
+        final char = tags[index];
         if (char == " " && !inQuotations) {
             tagList.add(currentText);
             currentText = "";
@@ -258,7 +291,7 @@ String trimLeft(String text, String? chars) {
 
     int start = 0;
 
-    for (String char in chars.characters) {
+    for (final String char in chars.characters) {
         if (!chars.contains(char)) break;
         start += 1;
     }
@@ -288,7 +321,7 @@ String trim(String text, String? chars) {
 }
 
 String calculateMD5(Uint8List imageData) {
-    var imageMD5 = md5.convert(imageData);
+    final imageMD5 = md5.convert(imageData);
 
     return imageMD5.toString();
 }
@@ -296,6 +329,26 @@ String calculateMD5(Uint8List imageData) {
 String toTitle(String string) {
     return string.substring(0, 1).toUpperCase() + string.substring(1);
 }
+
+var evaluator = DefaultRetryEvaluator({
+    status408RequestTimeout,
+    status500InternalServerError,
+    status502BadGateway,
+    status503ServiceUnavailable,
+    status504GatewayTimeout,
+    status440LoginTimeout,
+    status460ClientClosedRequest,
+    status499ClientClosedRequest,
+    status520WebServerReturnedUnknownError,
+    status521WebServerIsDown,
+    status522ConnectionTimedOut,
+    status523OriginIsUnreachable,
+    status524TimeoutOccurred,
+    status525SSLHandshakeFailed,
+    status527RailgunError,
+    status598NetworkReadTimeoutError,
+    status599NetworkConnectTimeoutError
+});
 
 void addSmartRetry(Dio dio) {
     dio.interceptors.add(
@@ -306,10 +359,24 @@ void addSmartRetry(Dio dio) {
             retryDelays: [
                 const Duration(seconds: 1),
                 const Duration(seconds: 2),
-                const Duration(seconds: 2),
-                const Duration(seconds: 3),
                 const Duration(seconds: 5),
-            ]
+                const Duration(seconds: 30),
+                const Duration(seconds: 60),
+            ],
+            retryEvaluator: (error, attempt) async {
+                if (error.response?.statusCode == 429) {
+                    if (attempt > 1) return false;
+
+                    await Future.delayed(const Duration(minutes: 1));
+                    return true;
+                }
+
+                if (error.response?.statusCode == 503 || error.response?.statusCode == 404 || error.response?.statusCode == 403) {
+                    return false;
+                }
+
+                return evaluator.evaluate(error, attempt);
+            },
         )
     );
 }

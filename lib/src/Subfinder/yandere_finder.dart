@@ -3,9 +3,10 @@
 import "dart:math";
 
 import "package:async/async.dart";
+import "package:nokufind/src/description.dart";
 
 import "subfinder.dart";
-import "../Utils/yandere_api.dart";
+import "../API/yandere_api.dart";
 import "../Utils/utils.dart";
 import "../post.dart";
 import "../comment.dart";
@@ -22,28 +23,27 @@ List<Map<String, dynamic>> _filterInvalidComments(List<Map<String, dynamic>> com
 
 class YandereFinder implements ISubfinder {
     static Post toPost(Map<String, dynamic> postData) {
-        int width = postData["width"];
-        int height = postData["height"];
-        String imageURL = postData["file_url"];
+        final int width = postData["width"];
+        final int height = postData["height"];
+        final String imageURL = postData["file_url"];
 
-        if (postData.containsKey("use_lower_quality")) {
-            width = postData["jpeg_width"];
-            height = postData["jpeg_height"];
-            imageURL = postData["jpeg_url"];
-        }
+        final int jpegWidth = postData["jpeg_width"];
+        final int jpegHeight = postData["jpeg_height"];
+        final String jpegImageURL = postData["jpeg_url"];
 
         return Post(
             postID: postData["id"], 
             tags: (postData["tags"] as String).split(" "), 
             sources: (postData["source"] as String).split(" "), 
             images: [imageURL], 
+            altImages: [jpegImageURL],
             authors: [], //(postData["tag_string_artist"] as String).split(" "), 
             source: "yande.re", 
             preview: postData["preview_url"], 
             md5: [postData["md5"]], 
             rating: postData["rating"], 
             parentID: postData["parent_id"], 
-            dimensions: [[width, height]], 
+            dimensions: [Dimensions(width, height, alt: Dimensions(jpegWidth, jpegHeight))], 
             poster: postData["author"] ?? "User ${postData['creator_id']}",
             posterID: postData["creator_id"], 
             title: null
@@ -77,6 +77,10 @@ class YandereFinder implements ISubfinder {
         );
     }
 
+    static Description toDescription(Map<String, dynamic> descriptionData) {
+        throw UnimplementedError("Hypnohub has no descriptions. Do not use toDescription.");
+    }
+
     final YandereAPI _client = YandereAPI();
     final _config = SubfinderConfiguration();
     final List<CancelableCompleter> _completers = [];
@@ -87,15 +91,15 @@ class YandereFinder implements ISubfinder {
 
     @override
     Future<List<Post>> searchPosts(String tags, {int limit = 100, int? page}) async {
-        page = (page == null) ? 1 : page;
+        page = (page == null) ? 1 : page + 1;
 
-        CancelableCompleter<List<Post>> completer = CancelableCompleter(
+        final CancelableCompleter<List<Post>> completer = CancelableCompleter(
             onCancel: () {
                 Nokulog.w("Search for \"$tags\" was cancelled.");
             }
         );
 
-        var searchFuture = _getAllPosts(tags, completer, limit: limit, page: page);
+        final searchFuture = _getAllPosts(tags, completer, limit: limit, page: page);
 
         _completers.add(completer);
 
@@ -105,10 +109,26 @@ class YandereFinder implements ISubfinder {
     }
 
     @override
+    Future<List<Post>> searchPostsAdvanced(String tags, {String optionalTags = "", String blacklist = "", int limit = 100, int? page}) {
+        final baseTags = tags.trim().split(" ");
+        final optionalTagList = (optionalTags.isNotEmpty) ? optionalTags.trim().split(" ").map((element) => "~$element") : <String>[];
+        final blacklistTags = (blacklist.isNotEmpty) ? blacklist.trim().split(" ").map((element) => "-$element") : <String>[];
+
+        final optionalTagString = (optionalTags.isNotEmpty) ? " ${optionalTagList.join(" ")}" : "";
+        final blacklistString = (blacklist.isNotEmpty) ? " ${blacklistTags.join(" ")}" : "";
+
+        return searchPosts(
+            "${baseTags.join(" ")}$optionalTagString$blacklistString", 
+            limit: limit, 
+            page: page
+        );
+    }
+
+    @override
     Future<Post?> getPost(int postID) async {
         if (postID <= 0) return null;
 
-        var rawPost = await _client.getPost(postID);
+        final rawPost = await _client.getPost(postID);
 
         if (_config.getConfig<bool>("use_lower_quality", defaultValue: false) == true) {
             rawPost?["use_lower_quality"] = true;
@@ -119,31 +139,36 @@ class YandereFinder implements ISubfinder {
 
     @override
     Future<List<Comment>> searchComments({int? postID, int limit = 100, int? page}) async {
-        page = (page == null) ? 1 : page;
+        page = (page == null) ? 1 : page + 1;
 
-        var rawComments = await _client.searchComments(postID: postID, limit: limit, page: page);
+        final rawComments = await _client.searchComments(postID: postID, limit: limit, page: page);
 
         //rawComments = _filterInvalidComments(rawComments);
 
-        return [for (var rawComment in rawComments) toComment(rawComment)];
+        return [for (final rawComment in rawComments) toComment(rawComment)];
     }
 
     @override
     Future<Comment?> getComment(int commentID, {int? postID}) async {
-        var rawComment = await _client.getComment(commentID);
+        final rawComment = await _client.getComment(commentID);
 
         return (rawComment != null) ? toComment(rawComment) : null;
     }
 
     @override
     Future<List<Note>> getNotes(int postID) async {
-        var rawNotes = await _client.getNotes(postID);
+        final rawNotes = await _client.getNotes(postID);
 
         if (rawNotes == null) {
             return List<Note>.empty(growable: true);
         }
 
-        return [for (var rawNote in rawNotes) toNote(rawNote)];
+        return [for (final rawNote in rawNotes) toNote(rawNote)];
+    }
+
+    @override
+    Future<Description?> getDescription(int postID) async {
+        return null;
     }
 
     @override
@@ -164,7 +189,7 @@ class YandereFinder implements ISubfinder {
     Future<void> cancelLastSearch() async {
         if (_completers.isEmpty) return;
 
-        var lastCompleter = _completers.removeLast();
+        final lastCompleter = _completers.removeLast();
         lastCompleter.operation.cancel();
     }
 
@@ -174,17 +199,17 @@ class YandereFinder implements ISubfinder {
         page = (page == null) ? 1 : page;
 
         List<Post> currentPosts = [];
-        int defaultSize = 100;
-        int checkSize = min(defaultSize, limit);
+        final int defaultSize = 100;
+        final int checkSize = min(defaultSize, limit);
         int currentSize = checkSize;
-        int currentPage = page;
+        int currentPage = (limit > checkSize) ? (page * (limit / checkSize)).floor() : page;
 
-        bool useLowerQuality = (_config.getConfig<bool>("use_lower_quality", defaultValue: false) == true);
+        final bool useLowerQuality = (_config.getConfig<bool>("use_lower_quality", defaultValue: false) == true);
 
         while (currentSize == checkSize) {
             if (completer.isCanceled) return [];
 
-            var rawPosts = await _client.searchPosts(tags, limit: checkSize, page: currentPage);
+            final rawPosts = await _client.searchPosts(tags, limit: checkSize, page: currentPage);
 
             if (completer.isCanceled) return [];
 

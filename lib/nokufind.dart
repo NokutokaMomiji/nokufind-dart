@@ -6,6 +6,7 @@ library;
 export 'src/post.dart';
 export 'src/comment.dart';
 export 'src/note.dart';
+export 'src/description.dart';
 export 'src/finder.dart';
 
 export 'src/Subfinder/subfinder.dart';
@@ -14,6 +15,7 @@ export 'src/Subfinder/rule34_finder.dart';
 export 'src/Subfinder/konachan_finder.dart';
 export 'src/Subfinder/yandere_finder.dart';
 export 'src/Subfinder/gelbooru_finder.dart';
+export 'src/Subfinder/hypnohub_finder.dart';
 export 'src/Subfinder/safebooru_finder.dart';
 export 'src/Subfinder/nhentai_finder.dart';
 export 'src/Subfinder/hitomi_finder.dart';
@@ -22,3 +24,4 @@ export 'src/Subfinder/pixiv_finder.dart';
 
 export 'src/Utils/download_stream.dart';
 export 'src/Utils/post_file.dart';
+export 'src/Utils/search_result.dart';

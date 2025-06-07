@@ -73,10 +73,10 @@ class DownloadStream {
         this.onFinished = onFinished;
 
         // We iterate through each post and fetch the data.
-        for (Post post in _postList) {
+        for (final Post post in _postList) {
             // We save the download task future to be able to add the onError callback as well as make it cancellable.
-            Future downloadTask = _executor.scheduleTask(() async {
-                DownloadStream instance = this;
+            final Future downloadTask = _executor.scheduleTask(() async {
+                final DownloadStream instance = this;
 
                 if (instance._hasCancelled) return;
 
@@ -84,7 +84,7 @@ class DownloadStream {
                 _controller.sink.add(DownloadData(post, DownloadStatus.downloadStart));
                 
                 // This fetches all the data from the post and stores it internally.
-                Future fetchFuture = post.fetchData();
+                final Future fetchFuture = post.fetchData();
 
                 if (instance._hasCancelled) return;
 
@@ -122,7 +122,7 @@ class DownloadStream {
         // After everything, the process is done, so we indicate that we have finished.
         _controller.sink.add(DownloadData(null, DownloadStatus.finished));
         
-        var finishedFunc = this.onFinished;
+        final finishedFunc = this.onFinished;
         if (finishedFunc != null) {
             finishedFunc();
         }
@@ -133,13 +133,13 @@ class DownloadStream {
 
         _hasCancelled = true;
 
-        for (var task in _tasks) {
+        for (final task in _tasks) {
             task.cancel();
         }
 
         await _executor.close();
 
-        var finishedFunc = onFinished;
+        final finishedFunc = onFinished;
         if (finishedFunc != null) {
             finishedFunc();
         }

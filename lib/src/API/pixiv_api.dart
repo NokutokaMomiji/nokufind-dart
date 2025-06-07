@@ -133,7 +133,7 @@ class BasePixivAPI {
 
         Map<String, dynamic> token = {};
 
-        Response<String> response = await requestsCall("POST", url, headers: otherHeaders, data: data);
+        final Response<String> response = await requestsCall("POST", url, headers: otherHeaders, data: data);
 
         try {
             token = jsonDecode(response.data!);
@@ -163,7 +163,7 @@ class AppPixivAPI extends BasePixivAPI{
         Map<String, dynamic>? data,
         bool requestAuth = true}
     ) async {
-        var headers_ = CaseInsensitiveMap<String>(headers ?? {});
+        final headers_ = CaseInsensitiveMap<String>(headers ?? {});
         if (hosts != "https://app-api.pixiv.net") {
             headers_["host"] = "app-api.pixiv.net";
         }

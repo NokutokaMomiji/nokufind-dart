@@ -4,9 +4,10 @@ import "dart:math";
 import "package:async/async.dart";
 import "package:executor/executor.dart";
 import "package:intl/intl.dart";
+import "package:nokufind/src/description.dart";
 
 import "subfinder.dart";
-import "../Utils/pixiv_api.dart";
+import "../API/pixiv_api.dart";
 import "../Utils/utils.dart";
 import "../post.dart";
 import "../comment.dart";
@@ -19,7 +20,7 @@ class PixivFinder implements ISubfinder {
     static final DateFormat formatter = DateFormat(formatString);
 
     static bool anyContains(List<Tag> list, String text) {
-        for (var item in list) {
+        for (final item in list) {
             if (item.original == text || item.translated == text) {
                 return true;
             }
@@ -29,10 +30,11 @@ class PixivFinder implements ISubfinder {
     }
 
     static Post toPost(Map<String, dynamic> postData) {
-        int pageCount = postData["page_count"] ?? 1;
-        List<String> urls = [];
+        final int pageCount = postData["page_count"] ?? 1;
+        final List<String> urls = [];
+        final List<String> altUrls = [];
         List<Tag> tags = [];
-        List originalTags = List<dynamic>.from(postData["tags"]!);
+        final List originalTags = List<dynamic>.from(postData["tags"]!);
 
         try {
             tags = originalTags.map<Tag>((element) => Tag(element["name"], translated: element["translated_name"] ?? "")).toList();
@@ -40,8 +42,8 @@ class PixivFinder implements ISubfinder {
             Nokulog.e(jsonEncode(postData), error: e, stackTrace: stackTrace);
         }
 
-        String artistName = postData["user"]["name"].toString();
-        int artistID = postData["user"]["id"];
+        final String artistName = postData["user"]["name"].toString();
+        final int artistID = postData["user"]["id"];
 
         if (!originalTags.contains(artistName)) {
             tags.add(Tag(artistName));
@@ -55,16 +57,18 @@ class PixivFinder implements ISubfinder {
 
         _artists[artistName] = artistID;
 
-        bool useLowerVersion = postData.containsKey("use_lower_quality");
-
         if (pageCount > 1) {
-            for (var page in postData["meta_pages"]) {
-                urls.add(page["image_urls"][(useLowerVersion) ? "large" : "original"]);
+            for (final page in postData["meta_pages"]) {
+                urls.add(page["image_urls"]["original"]);
+                altUrls.add(page["image_urls"]["large"]);
             }
         } else {
-            urls.add((useLowerVersion) ? postData["image_urls"]["large"] : postData["meta_single_page"]["original_image_url"]);
+            urls.add(postData["meta_single_page"]["original_image_url"]);
+            altUrls.add(postData["image_urls"]["large"]);
         }
     
+
+        // List<int>.from([postData["width"], postData["height"]])
         return Post(
             postID: postData["id"], 
             tags: tags, 
@@ -76,7 +80,7 @@ class PixivFinder implements ISubfinder {
             md5: null, 
             rating: (anyContains(tags, "R-18") || anyContains(tags, "R-18G")) ? Rating.explicit : Rating.unknown, 
             parentID: null, 
-            dimensions: List<List<int>>.filled(urls.length, List<int>.from([postData["width"], postData["height"]])), 
+            dimensions: List<Dimensions>.filled(urls.length, Dimensions(postData["width"], postData["height"])), 
             poster: postData["user"]["name"],
             posterID: postData["user"]["id"], 
             title: postData["title"]
@@ -106,6 +110,22 @@ class PixivFinder implements ISubfinder {
         throw Exception("Pixiv has no concept of notes. Do not use toNote.");
     }
 
+    static Description toDescription(Map<String, dynamic> descriptionData) {
+        final int postID = descriptionData["id"];
+        final String? originalDescription = descriptionData["caption"];
+
+        if (originalDescription == null) {
+            throw ArgumentError.notNull("caption");
+        }
+
+        return Description(
+            postID: postID, 
+            originalDescription: originalDescription, 
+            source: "pixiv", 
+            createdAt: formatter.parse(descriptionData["create_date"])
+        );
+    }
+
     final AppPixivAPI _client = AppPixivAPI();
     final _config = SubfinderConfiguration();
     final List<CancelableCompleter> _completers = [];
@@ -117,6 +137,7 @@ class PixivFinder implements ISubfinder {
     PixivFinder(this.refreshToken, {String? acceptLanguage}) {
         _tryAuth();
         _config.setProperty("use_lower_quality", false);
+        _config.setProperty("accept_language", "en-us");
         _config.lockProperties();
 
         _client.setAcceptLanguage(acceptLanguage ?? "en-us");
@@ -126,21 +147,29 @@ class PixivFinder implements ISubfinder {
     Future<List<Post>> searchPosts(String tags, {int limit = 100, int? page}) async {
         if (!await _tryAuth()) return [];
         
-        page = (page == null || page <= 0) ? 1 : page;
+        page = (page == null || page < 0) ? 1 : page + 1;
 
-        CancelableCompleter<List<Post>> completer = CancelableCompleter(
+        final CancelableCompleter<List<Post>> completer = CancelableCompleter(
             onCancel: () {
                 Nokulog.w("Search for \"$tags\" was cancelled.");
             }
         );
 
-        var searchFuture = _getAllPosts(tags, completer, limit: limit, page: page);
+        final searchFuture = _getAllPosts(tags, completer, limit: limit, page: page);
 
         _completers.add(completer);
 
         completer.complete(searchFuture);
 
         return completer.operation.value;
+    }
+
+    @override
+    Future<List<Post>> searchPostsAdvanced(String tags, {String optionalTags = "", String blacklist = "", int limit = 100, int? page}) {
+        final List<String> splitTags = parseTagsWithQuotes(tags);
+        final Iterable<String> splitBlacklist = parseTagsWithQuotes(tags).map((element) => "-$element");
+        
+        return searchPosts([...splitTags, ...splitBlacklist].join(" "));
     }
 
     @override
@@ -153,8 +182,6 @@ class PixivFinder implements ISubfinder {
         try {
             rawPost = (await _client.illustDetail(postID))["illust"];
 
-            Nokulog.d(rawPost);
-
             if (_config.getConfig<bool>("use_lower_quality", defaultValue: false) == true) {
                 rawPost?["use_lower_quality"] = true;
             }
@@ -163,8 +190,7 @@ class PixivFinder implements ISubfinder {
             Nokulog.e("Failed to fetch Pixiv post $postID.", error: e, stackTrace: stackTrace);
         }
 
-        var result = (rawPost != null) ? toPost(rawPost) : null;
-        Nokulog.d(result);
+        final result = (rawPost != null) ? toPost(rawPost) : null;
         return result;
     }
 
@@ -180,15 +206,15 @@ class PixivFinder implements ISubfinder {
             if (postID == null) {
                 rawComments = await _getCommentsFromRandomPosts(limit: limit, page: page);
             } else {
-                var results = await _client.illustComments(postID);
+                final results = await _client.illustComments(postID);
                 
                 if (!results.containsKey("comments")) {
                     Nokulog.e("Map doesn't contain \"comments\" key.");
                     return [];
                 }
 
-                for (var result in (results["comments"] as List)) {
-                    var currentComment = Map<String, dynamic>.from(result);
+                for (final result in (results["comments"] as List)) {
+                    final currentComment = Map<String, dynamic>.from(result);
                     currentComment["post_id"] = postID;
                     rawComments.add(currentComment);
                 }
@@ -198,7 +224,7 @@ class PixivFinder implements ISubfinder {
             Nokulog.e("Failed to fetch Pixiv comments.", error: e, stackTrace: stackTrace);
         }
 
-        return [for (var rawComment in rawComments) toComment(rawComment)];
+        return [for (final rawComment in rawComments) toComment(rawComment)];
     }
 
     @override
@@ -207,7 +233,7 @@ class PixivFinder implements ISubfinder {
 
         if (postID == null) return null;
 
-        var results = await searchComments(postID: postID);
+        final results = await searchComments(postID: postID);
         
         try {
             return results.firstWhere((element) => element.commentID == commentID);
@@ -226,6 +252,27 @@ class PixivFinder implements ISubfinder {
     }
 
     @override
+    Future<Description?> getDescription(int postID) async {
+        if (postID <= 0) return null;
+        if (!await _tryAuth()) return null;
+
+        try {
+            final Map<String, dynamic> rawPost = (await _client.illustDetail(postID))["illust"];
+
+            final String? caption = rawPost["caption"];
+
+            if (caption == null || caption.isEmpty) {
+                return null;
+            }
+
+            return toDescription(rawPost);
+        } catch (e, stackTrace) {
+            Nokulog.e("Failed to fetch post description.", error: e, stackTrace: stackTrace);
+            return null;
+        }
+    }
+
+    @override
     Future<Post?> postGetParent(Post post) async {
         return null;
     }
@@ -239,7 +286,7 @@ class PixivFinder implements ISubfinder {
     Future<void> cancelLastSearch() async {
         if (_completers.isEmpty) return;
 
-        var lastCompleter = _completers.removeLast();
+        final lastCompleter = _completers.removeLast();
         lastCompleter.operation.cancel();
     }
 
@@ -253,24 +300,24 @@ class PixivFinder implements ISubfinder {
         }
 
         List<Post> currentPosts = [];
-        int defaultSize = 30;
-        int checkSize = min(defaultSize, limit);
+        final int defaultSize = 30;
+        final int checkSize = min(defaultSize, limit);
         int currentSize = checkSize;
         int currentPage = page;
 
         int? artistID = _artists[tags];
         bool shouldCheckForArtist = (artistID == null);
-        bool lowerQuality = _config.getConfig<bool>("use_lower_quality", defaultValue: false) == true;
+        final bool lowerQuality = _config.getConfig<bool>("use_lower_quality", defaultValue: false) == true;
 
         if (!shouldCheckForArtist) {
             Nokulog.i("Artist with name \"$tags\" ($artistID) is recorded in artist registry.");
         }
 
-        var maxCount = (limit / defaultSize).ceil();
+        final maxCount = (limit / defaultSize).ceil();
 
         if (canUseExecutor && maxCount > 10) {
             Nokulog.i("Max count: $maxCount");
-            Executor executor = Executor(concurrency: maxCount, rate: Rate.perSecond(10));
+            final Executor executor = Executor(concurrency: maxCount, rate: Rate.perSecond(10));
 
             for (var i = currentPage - 1; i < maxCount; ++i) {
                 if (completer.isCanceled) return [];
@@ -281,7 +328,7 @@ class PixivFinder implements ISubfinder {
                         return;
                     }
 
-                    int currentOffset = (i * defaultSize);
+                    final int currentOffset = (i * defaultSize);
                     Map<String, dynamic> results;
                     try {
                         results = (artistID == null) ? ((tags.isEmpty) ? await _client.illustRanking() : await _client.searchIllust(tags, offset: currentOffset)) 
@@ -295,7 +342,7 @@ class PixivFinder implements ISubfinder {
                         return;
                     }
 
-                    var rawPosts = List<Map<String, dynamic>>.from((results["illusts"] as List).map((element) => Map<String, dynamic>.from(element)));
+                    final rawPosts = List<Map<String, dynamic>>.from((results["illusts"] as List).map((element) => Map<String, dynamic>.from(element)));
 
                     if (rawPosts.isEmpty) return;
 
@@ -333,7 +380,7 @@ class PixivFinder implements ISubfinder {
 
         while (currentSize == checkSize) {
             if (completer.isCanceled || tries >= maxTries) return [];
-            int currentOffset = ((currentPage - 1) * defaultSize);
+            final int currentOffset = ((currentPage - 1) * defaultSize);
 
             Map<String, dynamic> results;
             try {
@@ -350,11 +397,11 @@ class PixivFinder implements ISubfinder {
                 break;
             }
 
-            var rawPosts = List<Map<String, dynamic>>.from((results["illusts"] as List).map((element) => Map<String, dynamic>.from(element)));
+            final rawPosts = List<Map<String, dynamic>>.from((results["illusts"] as List).map((element) => Map<String, dynamic>.from(element)));
             
             if (rawPosts.length < 5 && shouldCheckForArtist) {
                 Nokulog.w("Search for \"$tags\" returned empty. Checking if artist.");
-                var artistData = await _client.searchUser(tags);
+                final artistData = await _client.searchUser(tags);
                 
                 if ((artistData["user_previews"] as List).isEmpty) {
                     Nokulog.w("No artists or users with name \"$tags\" found. Breaking.");
@@ -363,9 +410,9 @@ class PixivFinder implements ISubfinder {
 
                 Nokulog.i("Found artist! Storing in record and starting anew.");
                 
-                for (var artist in (artistData["user_previews"] as List)) {
-                    int currentID = artist["user"]["id"];
-                    String currentName = artist["user"]["name"];
+                for (final artist in (artistData["user_previews"] as List)) {
+                    final int currentID = artist["user"]["id"];
+                    final String currentName = artist["user"]["name"];
 
                     if (!_artists.containsKey(currentName)) {
                         Nokulog.i("Adding \"$currentName\" to artist registry.");
@@ -430,28 +477,28 @@ class PixivFinder implements ISubfinder {
         final Executor executor = Executor(concurrency: tagList.length);
 
         List<Post> currentPosts = [];
-        int defaultSize = 30;
-        int checkSize = min(defaultSize, limit);
-        bool lowerQuality = _config.getConfig<bool>("use_lower_quality", defaultValue: false) == true;
+        final int defaultSize = 30;
+        final int checkSize = min(defaultSize, limit);
+        final bool lowerQuality = _config.getConfig<bool>("use_lower_quality", defaultValue: false) == true;
 
         final HashSet<String> artistTags = HashSet.from(tagList.where((item) => item.startsWith("artist:") || _artists.containsKey(item)));
 
-        List<Map<String, dynamic>> totalRawPosts = [];
+        final List<Map<String, dynamic>> totalRawPosts = [];
 
-        for (String tag in artistTags) {
+        for (final String tag in artistTags) {
             int? artistID;
 
             if (tag.startsWith("artist:")) {
-                String lastPart = tag.replaceAll("artist:", "");
-                int? possibleID = int.tryParse(lastPart);
+                final String lastPart = tag.replaceAll("artist:", "");
+                final int? possibleID = int.tryParse(lastPart);
 
                 if (possibleID != null && !_artistIDs.contains(possibleID)) {
                     // In the case that the ID is an actual valid user ID, we should fetch the name to store it internally.
                     executor.scheduleTask(() async {
                         try {
-                            var artist = await _client.userDetail(possibleID);
+                            final artist = await _client.userDetail(possibleID);
 
-                            String name = artist["user"]["name"];
+                            final String name = artist["user"]["name"];
 
                             if (!_artists.containsKey(name)) _artists[name] = possibleID;
                         
@@ -483,12 +530,12 @@ class PixivFinder implements ISubfinder {
                 while (currentSize == checkSize) {
                     try {
                         Nokulog.d("currentPage: $currentPage");
-                        int currentOffset = (currentPage - 1) * defaultSize;
-                        var results = await _client.userIllusts(artistID, offset: currentOffset);
+                        final int currentOffset = (currentPage - 1) * defaultSize;
+                        final results = await _client.userIllusts(artistID, offset: currentOffset);
 
                         if (completer.isCanceled) return;
 
-                        var rawPosts = List<Map<String, dynamic>>.from((results["illusts"] as List).map((element) => Map<String, dynamic>.from(element)));    
+                        final rawPosts = List<Map<String, dynamic>>.from((results["illusts"] as List).map((element) => Map<String, dynamic>.from(element)));    
                         currentSize = rawPosts.length;
 
                         totalRawPosts.addAll(rawPosts);
@@ -514,11 +561,11 @@ class PixivFinder implements ISubfinder {
 
         if (tagList.length != artistTags.length) {
             currentPosts.removeWhere((item) {
-                for (var tag in tagList) {
+                for (final tag in tagList) {
                     if (artistTags.contains(tag)) return false;
                     
                     bool shouldRemove = true;
-                    for (var innerTag in item.tags) {
+                    for (final innerTag in item.tags) {
                         if (innerTag.contains(tag)) {
                             shouldRemove = false;
                             break;
@@ -543,7 +590,7 @@ class PixivFinder implements ISubfinder {
 
     Future<int?> _getArtistID(String artistName) async {
         int? artistID;
-        var artistData = await _client.searchUser(artistName);
+        final artistData = await _client.searchUser(artistName);
                 
         if ((artistData["user_previews"] as List).isEmpty) {
             Nokulog.w("No artists or users with name \"$artistName\" found. Returning.");
@@ -552,9 +599,9 @@ class PixivFinder implements ISubfinder {
 
         Nokulog.i("Found artist! Storing in record and starting anew.");
         
-        for (var artist in (artistData["user_previews"] as List)) {
-            int currentID = artist["user"]["id"];
-            String currentName = artist["user"]["name"];
+        for (final artist in (artistData["user_previews"] as List)) {
+            final int currentID = artist["user"]["id"];
+            final String currentName = artist["user"]["name"];
 
             if (!_artists.containsKey(currentName)) _artists[currentName] = currentID;
 
@@ -573,30 +620,30 @@ class PixivFinder implements ISubfinder {
         
         List<Map<String, dynamic>> comments = [];
 
-        int defaultSize = 30;
-        int checkSize = min(defaultSize, limit);
+        final int defaultSize = 30;
+        final int checkSize = min(defaultSize, limit);
         int currentSize = checkSize;
         int currentPage = page;
 
         while (currentSize == checkSize) {
-            int currentOffset = (currentPage - 1) * 30;
+            final int currentOffset = (currentPage - 1) * 30;
 
-            var response = await _client.illustRanking(offset: currentOffset);
-            List currentPosts = response["illusts"];
+            final response = await _client.illustRanking(offset: currentOffset);
+            final List currentPosts = response["illusts"];
 
             currentSize = currentPosts.length;
 
-            for (var post in currentPosts) {
-                int postID = post["id"];
+            for (final post in currentPosts) {
+                final int postID = post["id"];
 
-                var commentResponse = await _client.illustComments(postID, includeTotalComments: true);
+                final commentResponse = await _client.illustComments(postID, includeTotalComments: true);
 
                 if (!commentResponse.containsKey("comments")) continue;
 
-                List currentComments = commentResponse["comments"];
+                final List currentComments = commentResponse["comments"];
 
-                for (var commentData in currentComments) {
-                    var comment = Map<String, dynamic>.from(commentData);
+                for (final commentData in currentComments) {
+                    final comment = Map<String, dynamic>.from(commentData);
                     comment["post_id"] = postID;
                     comments.add(comment);
                 }
@@ -621,10 +668,10 @@ class PixivFinder implements ISubfinder {
     }
 
     Future<bool> _tryAuth() async {
-        DateTime currentTime = DateTime.now();
+        final DateTime currentTime = DateTime.now();
         _lastTime = _lastTime ?? DateTime.now();
 
-        Duration timeDifference = currentTime.difference(_lastTime!);
+        final Duration timeDifference = currentTime.difference(_lastTime!);
 
         if (_hasAuth && timeDifference.inSeconds < 3600) return true;
 

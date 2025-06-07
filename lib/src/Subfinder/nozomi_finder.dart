@@ -1,18 +1,23 @@
-
-
 import "package:async/async.dart";
+import "package:nokufind/src/Utils/utils.dart";
+import "package:nokufind/src/description.dart";
 
 import "subfinder.dart";
-import "../Utils/nozomi_api.dart";
+import "../API/nozomi_api.dart";
 import "../post.dart";
 import "../comment.dart";
 import "../note.dart";
 
 class NozomiFinder implements ISubfinder {
     static Post toPost(Map<String, dynamic> postData) {
+        final tags = (postData["tags"] as List<String>).map((element) => Tag(element)).toList();
+        tags.addAll((postData["artists"] as List<String>).map((element) => Tag(element, type: TagType.artist)).toList());
+        tags.addAll((postData["series"] as List<String>).map((element) => Tag(element, type: TagType.series)).toList());
+        tags.addAll((postData["characters"] as List<String>).map((element) => Tag(element, type: TagType.character)));
+
         return Post(
             postID: postData["postID"], 
-            tags: postData["tags"], 
+            tags: tags, 
             sources: [], 
             images: postData["images"], 
             authors: postData["artists"],
@@ -29,11 +34,15 @@ class NozomiFinder implements ISubfinder {
     }
 
     static Comment toComment(Map<String, dynamic> commentData) {
-        throw Exception("Nozomi has no concept of comments. Do not use \"toComment\".");
+        throw UnimplementedError("Nozomi has no concept of comments. Do not use \"toComment\".");
     }
 
     static Note toNote(Map<String, dynamic> noteData) {
-        throw Exception("Nozomi has no concept of notes. Do not use \"toNote\".");
+        throw UnimplementedError("Nozomi has no concept of notes. Do not use \"toNote\".");
+    }
+
+    static Description toDescription(Map<String, dynamic> descriptionData) {
+        throw UnimplementedError("Hypnohub has no descriptions. Do not use toDescription.");
     }
 
     final NozomiAPI _client = NozomiAPI();
@@ -43,18 +52,83 @@ class NozomiFinder implements ISubfinder {
 
     @override
     Future<List<Post>> searchPosts(String tags, {int limit = 100, int? page}) async {
-        page = (page == null) ? 1 : page;
+        page = (page == null) ? 1 : page + 1;
 
-        var rawPosts = await _client.searchPosts(tags, limit: limit, page: page);
+        final rawPosts = await _client.searchPosts(tags, limit: limit, page: page);
 
         return rawPosts.map(toPost).toList();
+    }
+
+    @override
+    Future<List<Post>> searchPostsAdvanced(String tags, {String optionalTags = "", String blacklist = "", int limit = 100, int? page}) async {
+        page = (page == null) ? 1 : page + 1;
+
+        final CancelableCompleter<List<Post>> completer = CancelableCompleter(
+            onCancel: () {
+                Nokulog.w("Search for \"$tags\" was cancelled.");
+            }
+        );
+
+        final List<String> baseTags = tags.trim().split(" ");
+        final List<String> splitOptionalTags = optionalTags.trim().split(" ")..removeWhere((element) => baseTags.contains(element) || element.isEmpty);
+        final Iterable<String> blacklistTags = (blacklist.isNotEmpty) ? blacklist.trim().split(" ").map((element) => "-$element") : [];
+
+        final List<String> queries;
+        if (splitOptionalTags.isEmpty) {
+            // Only base tags + blacklist
+            queries = [[
+                    ...baseTags,
+                    ...blacklistTags,
+                ].where(
+                    (element) => element.isNotEmpty
+                ).join(" "),
+            ];
+        } else {
+            // One query for each optional tag
+            queries = splitOptionalTags.map((optTag) {
+                return [
+                    ...baseTags,
+                    optTag,
+                    ...blacklistTags,
+                ].where(
+                    (element) => element.isNotEmpty
+                ).join(" ");
+            }).toList();
+        }
+
+        final int postsPerQuery = (limit / queries.length).ceil();
+
+        final futures = queries.map(
+            (query) => () async {
+                if (completer.isCanceled) return <Map<String, dynamic>>[];
+
+                Nokulog.i("query: $query");
+                return await _client.searchPosts(
+                    query,
+                    limit: postsPerQuery,
+                    page: page ?? 1,
+                );
+            }(),
+        ).toList();
+
+        _completers.add(completer);
+
+        final rawPosts = () async {
+            final results = (await Future.wait(futures));
+            final result = (results.isNotEmpty) ? results.reduce((value, element) => value + element) : <Map<String, dynamic>>[];
+            return result.map(toPost).toList();
+        }();
+
+        completer.complete(rawPosts);
+
+        return completer.operation.value;
     }
 
     @override
     Future<Post?> getPost(int postID) async {
         if (postID <= 0) return null;
 
-        var rawPost = await _client.getPost(postID);
+        final rawPost = await _client.getPost(postID);
 
         return (rawPost != null) ? toPost(rawPost) : null;
     }
@@ -75,6 +149,11 @@ class NozomiFinder implements ISubfinder {
     }
 
     @override
+    Future<Description?> getDescription(int postID) async {
+        return null;
+    }
+
+    @override
     Future<Post?> postGetParent(Post post) async {
         return null;
     }
@@ -88,7 +167,7 @@ class NozomiFinder implements ISubfinder {
     Future<void> cancelLastSearch() async {
         if (_completers.isEmpty) return;
 
-        var lastCompleter = _completers.removeLast();
+        final lastCompleter = _completers.removeLast();
         lastCompleter.operation.cancel();
     }
     
