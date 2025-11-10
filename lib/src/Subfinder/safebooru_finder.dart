@@ -40,6 +40,7 @@ class SafebooruFinder implements ISubfinder {
             authors: [], //(postData["tag_string_artist"] as String).split(" "), 
             source: "safebooru", 
             preview: postData["preview_url"], 
+            sample: sampleURL,
             md5: [postData["hash"]], 
             rating: postData["rating"], 
             parentID: (postData["parent_id"] != 0) ? postData["parent_id"] : null, 
@@ -105,7 +106,7 @@ class SafebooruFinder implements ISubfinder {
 
         completer.complete(searchFuture);
 
-        return completer.operation.value;
+        return (await completer.operation.valueOrCancellation()) ?? <Post>[];
     }
 
     @override

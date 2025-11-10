@@ -4,16 +4,16 @@ import "package:dio/dio.dart";
 import "package:dio_http2_adapter/dio_http2_adapter.dart";
 import "package:html/dom.dart";
 import "package:intl/intl.dart";
+import "package:nokufind/src/API/api_tools.dart";
 import "package:xml/xml.dart";
 import "package:html_unescape/html_unescape_small.dart";
 
 import "../Utils/utils.dart";
 
-class GelbooruAPI {
+class GelbooruAPI extends BaseAPI{
     static const String _url = "https://gelbooru.com/";
     static final HtmlUnescape _unescape = HtmlUnescape();
 
-    final Dio _client = Dio()..httpClientAdapter = Http2Adapter(ConnectionManager(idleTimeout: const Duration(seconds: 15)));
     final _dateFormat = DateFormat("yyyy-MM-dd HH:mm:ss");
     final _noteDateFormat = DateFormat("EEE MMM d HH:mm:ss -yyyy yyyy");
     final _profileExpr = RegExp(r"(?<=url\(')(.*?)(?='\))");
@@ -21,10 +21,17 @@ class GelbooruAPI {
     final _commentIDExpr = RegExp(r"(?<=#)\d+");
     final _commentBodyExpr = RegExp(r"(?<=<br><br>)(.*?)(?=<br><br>)");
 
+    String _apiKey = "";
     CancelToken? _token;
 
-    GelbooruAPI() {
-        addSmartRetry(_client);
+    GelbooruAPI() : super(
+        Dio()..httpClientAdapter = Http2Adapter(ConnectionManager(idleTimeout: const Duration(seconds: 15)))
+    ) {
+        addSmartRetry(client);
+    }
+
+    void auth({required String apiKey, required int userID}) {
+        _apiKey = "&api_key=$apiKey&user_id=$userID";
     }
 
     Future<List<Map<String, dynamic>>> searchPosts(String tags,{int limit = 100, int page = 0}) async {
@@ -109,7 +116,7 @@ class GelbooruAPI {
         final String paramString = mapToPairedString(params);
         final Uri requestURL = Uri.parse("${_url}index.php?$paramString");
         
-        final Response<String> content = await _client.get(requestURL.toString());
+        final Response<String> content = await client.get(requestURL.toString());
     
         final Document document = Document.html(content.data!);
 
@@ -184,7 +191,7 @@ class GelbooruAPI {
         final String paramString = mapToPairedString(params);
         final Uri requestURL = Uri.parse("${_url}index.php?$paramString");
         
-        final Response<String> content = await _client.get(requestURL.toString());
+        final Response<String> content = await client.get(requestURL.toString());
     
         final XmlDocument document = XmlDocument.parse(content.data!);
 
@@ -210,13 +217,13 @@ class GelbooruAPI {
 
     Future<dynamic> _makeRequest(String file, {Map<String, String>? params}) async {
         final String paramString = (params != null) ? mapToPairedString(params) : "";
-        final Uri requestURL = Uri.parse("$_url$file?$paramString");
+        final Uri requestURL = Uri.parse("$_url$file?$paramString$_apiKey");
 
         Nokulog.d(requestURL);
 
         _token = CancelToken();
 
-        final Response<String> response = await _client.get(requestURL.toString(), cancelToken: _token);
+        final Response<String> response = await client.get(requestURL.toString(), cancelToken: _token);
 
         final data = response.data;
 

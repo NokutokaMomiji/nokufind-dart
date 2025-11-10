@@ -6,21 +6,31 @@ import "package:executor/executor.dart";
 import "package:html/dom.dart";
 import "package:html/parser.dart";
 import "package:intl/intl.dart";
+import "package:nokufind/src/API/api_tools.dart";
 import "package:xml/xml.dart";
 import "package:html_unescape/html_unescape_small.dart";
 
 import "../Utils/utils.dart";
 
-class Rule34API {
+class Rule34API extends BaseAPI {
     static const String _url = "https://api.rule34.xxx/";
     static const String _siteUrl = "https://rule34.xxx/";
+
     static final HtmlUnescape _unescape = HtmlUnescape();
 
     final Dio _client = Dio()..httpClientAdapter = Http2Adapter(ConnectionManager(idleTimeout: const Duration(seconds: 15)));
     final _dateFormat = DateFormat("yyyy-MM-dd HH:mm:ss");
+    
+    String _apiKey = "";
 
-    Rule34API() {
+    Rule34API() : super(
+        Dio()..httpClientAdapter = Http2Adapter(ConnectionManager(idleTimeout: const Duration(seconds: 15)))
+    ){
         addSmartRetry(_client);
+    }
+
+    void auth({required String apiKey, required int userID}) {
+        _apiKey = "&api_key=$apiKey&user_id=$userID";
     }
 
     Future<List<Map<String, dynamic>>> searchPosts(String tags,{int limit = 1000, int page = 0}) async {
@@ -38,7 +48,17 @@ class Rule34API {
         };
 
         try {
-            final List<dynamic> results = await _makeRequest("index.php", params: params) as List<dynamic>;
+            final response = await _makeRequest("index.php", params: params);
+            if (response is String) {
+                final String stringedParams = mapToPairedString(params, separator: "\n");
+                Nokulog.e(
+                    "[Rule34]: Request returned String when we were expecting a list of posts.\n"
+                    "Response: \"$response\"\n\n"
+                    "[Request]\n$stringedParams"
+                );
+            }
+
+            final List<dynamic> results = response as List<dynamic>;
             
             if (results.isEmpty) return const [];
 
@@ -50,7 +70,16 @@ class Rule34API {
                 executor.scheduleTask(() async {
                     final tags = (_unescape.convert(results[i]["tags"] as String)).split(" ");
                     final source = (results[i]["source"] as String);
-                    final sources = (source.isNotEmpty) ? source.split(" ") : <String>[]; 
+                    final sources = (source.isNotEmpty) ? source.split(" ") : <String>[];
+
+                    final fileUrl = results[i]["file_url"] as String;
+                    final sampleUrl = results[i]["sample_url"] as String;
+
+                    if (!fileUrl.contains("mp4")) {
+                        results[i]["file_url"] = fileUrl.replaceAll("api-cdn", "wimg");
+                    }
+                
+                    results[i]["sample_url"] = sampleUrl.replaceAll("api-cdn", "wimg");
 
                     results[i]["tags"] = tags;
                     results[i]["sources"] = sources;
@@ -85,6 +114,15 @@ class Rule34API {
                 final tags = (_unescape.convert(results[i]["tags"] as String)).split(" ");
                 final source = (results[i]["source"] as String);
                 final sources = (source.isNotEmpty) ? source.split(" ") : <String>[];
+
+                final fileUrl = results[i]["file_url"] as String;
+                final sampleUrl = results[i]["sample_url"] as String;
+
+                if (!fileUrl.contains("mp4")) {
+                    results[i]["file_url"] = fileUrl.replaceAll("api-cdn", "wimg");
+                }
+                
+                results[i]["sample_url"] = sampleUrl.replaceAll("api-cdn", "wimg");
 
                 results[i]["tags"] = tags;
                 results[i]["sources"] = sources;
@@ -234,17 +272,17 @@ class Rule34API {
 
     Future<dynamic> _makeRequest(String file, {Map<String, String>? params}) async {
         final String paramString = (params != null) ? mapToPairedString(params) : "";
-        final Uri requestURL = Uri.parse("$_url$file?$paramString");
-        
+        final Uri requestURL = Uri.parse("$_url$file?$paramString$_apiKey");
+
         final Response<String> response = await _client.get(requestURL.toString());
         
-        if (response.data == null) {
+        if (response.data == null || response.data?.isEmpty == true) {
             throw DioException(
                 stackTrace: StackTrace.current,
                 type: DioExceptionType.badResponse,
                 requestOptions: response.requestOptions,
                 response: response,
-                message: "Response data was null"
+                message: "Response data was null or empty"
             );
         }
 

@@ -1,5 +1,7 @@
 
 
+import "dart:math";
+
 import "package:async/async.dart";
 import "package:nokufind/src/Utils/utils.dart";
 import "package:nokufind/src/description.dart";
@@ -75,31 +77,58 @@ class HitomiFinder implements ISubfinder {
         );
 
         final List<String> baseTags = tags.trim().split(" ");
-        final List<String> splitOptionalTags = (optionalTags.trim().isNotEmpty) ? (optionalTags.trim().split(" ")..removeWhere((element) => baseTags.contains(element))) : [];
-        final Iterable<String> blacklistTags = (blacklist.trim().isNotEmpty) ? blacklist.trim().split(" ").map((element) => "-$element") : [];
+        final List<String> splitOptionalTags = optionalTags.trim().split(" ")..removeWhere((element) => baseTags.contains(element) || element.isEmpty);
+        final Iterable<String> blacklistTags = (blacklist.isNotEmpty) ? blacklist.trim().split(" ").map((element) => "-$element") : [];
 
-        final int postsPerQuery = (splitOptionalTags.length / limit).ceil();
+        final List<String> queries;
+        if (splitOptionalTags.isEmpty) {
+            // Only base tags + blacklist
+            queries = [[
+                    ...baseTags,
+                    ...blacklistTags,
+                ].where(
+                    (element) => element.isNotEmpty
+                ).join(" "),
+            ];
+        } else {
+            // One query for each optional tag
+            queries = splitOptionalTags.map((optTag) {
+                return [
+                    ...baseTags,
+                    optTag,
+                    ...blacklistTags,
+                ].where(
+                    (element) => element.isNotEmpty
+                ).join(" ");
+            }).toList();
+        }
 
-        final futures = splitOptionalTags.map(
-            (element) => () async {
+        final int postsPerQuery = (limit / queries.length).ceil();
+
+        final futures = queries.map(
+            (query) => () async {
                 if (completer.isCanceled) return <Map<String, dynamic>>[];
 
-                final String query = [...baseTags, element, ...blacklistTags].join(" ");
-                return await _client.searchPosts(query, limit: postsPerQuery, page: page ?? 1);
-            }()
+                Nokulog.i("query: $query");
+                return await _client.searchPosts(
+                    query,
+                    limit: postsPerQuery,
+                    page: page ?? 1,
+                );
+            }(),
         ).toList();
 
         _completers.add(completer);
 
         final rawPosts = () async {
             final results = (await Future.wait(futures));
-            final result = results.reduce((value, element) => value + element);
+            final result = (results.isNotEmpty) ? results.reduce((value, element) => value + element) : <Map<String, dynamic>>[];
             return result.map(toPost).toList();
         }();
 
         completer.complete(rawPosts);
 
-        return completer.operation.value;
+        return (await completer.operation.valueOrCancellation()) ?? <Post>[];
     }
 
     @override

@@ -4,6 +4,7 @@ import "dart:typed_data";
 import "package:dio/dio.dart";
 import "package:dio_http2_adapter/dio_http2_adapter.dart";
 import "package:executor/executor.dart";
+import "package:nokufind/src/API/api_tools.dart";
 
 import "../Utils/utils.dart";
 
@@ -32,24 +33,34 @@ String fullPathFromHash(String hash) {
     return hash;
 }
 
-class NozomiAPI {
+class NozomiAPI extends BaseAPI {
     static const String _url = "https://j.gold-usergeneratedcontent.net/";
     static const String _imageUrl = "https://w.gold-usergeneratedcontent.net/";
     static const String _indexUrl = "https://n.nozomi.la/index.nozomi";
 
-    final Dio _client = Dio()..httpClientAdapter = Http2Adapter(ConnectionManager(idleTimeout: const Duration(seconds: 15)));
+    NozomiAPI() : super(
+        Dio()..httpClientAdapter = Http2Adapter(ConnectionManager(idleTimeout: const Duration(seconds: 15)))
+    ) {
+        addSmartRetry(client);
 
-    NozomiAPI() {
-        addSmartRetry(_client);
+        errors.listen((data) {
+            if (data.url != null) {
+                _logError("Failed URL: \"${data.url}\"\n${data.message}");
+                return;
+            }
+
+            _logError(data.message, error: data.exception, stackTrace: data.stackTrace);
+        });
     }
 
     static String fullUrlFromPathFromHash(String hash, bool isVideo, bool isGif) {
         final String hashString = fullPathFromHash(hash);
         final String ext = (isVideo) ? ".webm" : ((isGif) ? ".gif" : ".webp");
+
         return "${(isGif) ? _imageUrl.replaceFirst("w.", "g.") : _imageUrl}$hashString$ext";
     }
 
-    Future<List<Map<String, dynamic>>> searchPosts(String tags, {int limit = 100, int page = 1}) async {
+    Future<List<Map<String, dynamic>>> searchPosts(String tags, {int limit = 100, int page = 1, CancelToken? cancelToken}) async {
         // Neither the page index nor the limit of posts can be smaller or equal to 0.
         // We cap them to sensible values.
         if (page <= 0) page = 1;
@@ -78,28 +89,29 @@ class NozomiAPI {
             tagList.add(_indexUrl);
         }
 
-        Nokulog.d(tagList);
+        _log(tagList);
 
-        final oldHeaders = Map<String, dynamic>.from(_client.options.headers);
-        _client.options.responseType = ResponseType.bytes;
-
-        // We'll store positive‐tag results here; negative‐tag results separately.
-        final Map<String, List<int>> results = {};
-        final Map<String, List<int>> negativeResults = {};
+        final oldHeaders = Map<String, dynamic>.from(client.options.headers);
 
         final int byteStart = (page - 1) * limit * 4;
         final int byteEnd = byteStart + limit * 4 - 1;
 
-        _client.options.headers["Range"] = "bytes=$byteStart-";
+        client.options.headers["Range"] = "bytes=$byteStart-";
 
         // If we only have a singular positive file, limit it.
-        if (tagList.length == 1) {
-            _client.options.headers["Range"] += "$byteEnd";
+        if ((tagList.length + negativeTagList.length) == 1) {
+            client.options.headers["Range"] += "$byteEnd";
         }
 
-        Nokulog.d(_client.options.headers["Range"]);
+        _log(client.options.headers["Range"]);
 
+        final CancelToken token = cancelToken ?? CancelToken();
         final Executor tagExecutor = Executor(concurrency: 15);
+
+        final Map<String, List<int>> results = {};
+        final Map<String, List<int>> negativeResults = {};
+
+        bool errorHasOccurred = false;
 
         // Fetch ID lists for positive tags / index
         for (final String tag in tagList) {
@@ -108,69 +120,45 @@ class NozomiAPI {
             }
 
             tagExecutor.scheduleTask(() async {
-                try {
-                    Nokulog.d("Requesting $tag");
-                    final Response<Uint8List> response = await _client.get(tag);
+                if (token.isCancelled || errorHasOccurred) return;
 
-                    Nokulog.d("Response: ${response.statusCode}");
-                    final Uint8List? data = response.data;
-                    if (data == null) {
-                        Nokulog.e("Data for tag \"$tag\" was null.");
-                        return null;
-                    }
+                final result = await _fetchIDList(tag, cancelToken: cancelToken);
 
-                    final int totalItems = data.length ~/ 4;
-                    if (totalItems == 0) {
-                        return null;
-                    }
-
-                    final buffer = ByteData.sublistView(data);
-                    for (int i = 0; i < totalItems; i++) {
-                        final int value = buffer.getInt32(i * 4);
-                        results[tag]!.add(value);
-                    }
-                } catch (e, stackTrace) {
-                    Nokulog.e("Failed to fetch \"$tag\".", error: e, stackTrace: stackTrace);
+                if (result.isError) {
+                    errorHasOccurred = true;
+                    return;
                 }
+
+                results[tag]!.addAll(result.data!);
             });
         }
 
         // Fetch ID lists for negative tags
-        for (final String negTag in negativeTagList) {
-            if (!negativeResults.containsKey(negTag)) {
-                negativeResults[negTag] = [];
+        for (final negativeTag in negativeTagList) {
+            if (!negativeResults.containsKey(negativeTag)) {
+                negativeResults[negativeTag] = [];
             }
 
             tagExecutor.scheduleTask(() async {
-                try {
-                    Nokulog.d("Requesting negative tag $negTag");
-                    final Response<Uint8List> response = await _client.get(negTag);
+                if (token.isCancelled || errorHasOccurred) return;
 
-                    Nokulog.d("Response: ${response.statusCode}");
-                    final Uint8List? data = response.data;
-                    if (data == null) {
-                        Nokulog.e("Data for negative tag \"$negTag\" was null.");
-                        return null;
-                    }
+                final result = await _fetchIDList(negativeTag, cancelToken: cancelToken);
 
-                    final int totalItems = data.length ~/ 4;
-                    if (totalItems == 0) {
-                        return null;
-                    }
-
-                    final buffer = ByteData.sublistView(data);
-                    for (int i = 0; i < totalItems; i++) {
-                        final int value = buffer.getInt32(i * 4);
-                        negativeResults[negTag]!.add(value);
-                    }
-                } catch (e, stackTrace) {
-                    Nokulog.e("Failed to fetch negative tag \"$negTag\".", error: e, stackTrace: stackTrace);
+                if (result.isError) {
+                    errorHasOccurred = true;
+                    return;
                 }
+
+                results[negativeTag]!.addAll(result.data!);
             });
         }
 
         await tagExecutor.join(withWaiting: true);
         await tagExecutor.close();
+
+        if (errorHasOccurred) {
+            return [];
+        }
 
         // Compute intersection of all positive‐tag result sets
         final intersectionPosts = results.values.fold<Set<int>>(
@@ -197,7 +185,7 @@ class NozomiAPI {
             filteredPosts = filteredPosts.sublist(0, limit);
         }
 
-        Nokulog.d("filteredPosts: ${filteredPosts.length}");
+        _log("filteredPosts: ${filteredPosts.length}");
 
         if (filteredPosts.isEmpty) {
             return [];
@@ -205,8 +193,8 @@ class NozomiAPI {
 
         final List<Map<String, dynamic>> posts = [];
 
-        _client.options.headers = oldHeaders;
-        _client.options.responseType = ResponseType.plain;
+        client.options.headers = oldHeaders;
+        client.options.responseType = ResponseType.plain;
 
         final Executor executor = Executor(concurrency: 15);
 
@@ -221,7 +209,7 @@ class NozomiAPI {
         await executor.join(withWaiting: true);
         await executor.close();
 
-        Nokulog.d("total posts: ${posts.length}");
+        _log("total posts: ${posts.length}");
 
         return posts;
     }
@@ -236,10 +224,19 @@ class NozomiAPI {
 
         try {
             final String postPath = fullPathFromHash(postID.toString());
-            final Response<String> postRequest = await _client.get("${_url}post/$postPath.json", options: Options(responseType: ResponseType.plain));
+            final APIResult<String> postRequest = await safeGET(
+                "${_url}post/$postPath.json", 
+                (raw) => raw,
+                options: Options(responseType: ResponseType.plain)
+            );
+            
+            if (postRequest.isError) {
+                return null;
+            }
+            
             final String? responseData = postRequest.data;
 
-            if (responseData == null) return jsonData;
+            if (responseData == null) return null;
 
             jsonData = jsonDecode(responseData);
 
@@ -256,6 +253,7 @@ class NozomiAPI {
                 // Theoretically, is_video should always be a string, but I already have too many bad memories of hitomi.
                 final String isVideo = (imageData["is_video"] is! String) ? imageData["is_video"].toString() : imageData["is_video"];
                 final bool isGif = (imageData["type"] == "gif");
+
                 images.add(fullUrlFromPathFromHash(imageData["dataid"], isVideo.isNotEmpty, isGif));
 
                 // Same thing with the dimensions of the image.
@@ -328,8 +326,8 @@ class NozomiAPI {
 
 
         } catch (e, stacktrace) {
-            Nokulog.e("Failed to fetch post with ID $postID.", error: e, stackTrace: stacktrace);
-            Nokulog.e(jsonEncode(jsonData), error: e, stackTrace: stacktrace);
+            _logError("Failed to fetch post with ID $postID.", error: e, stackTrace: stacktrace);
+            _logError(jsonEncode(jsonData), error: e, stackTrace: stacktrace);
             return null;
         }
     }
@@ -344,5 +342,30 @@ class NozomiAPI {
 
     Future<List<Map<String, dynamic>>> getNotes(int postID) async {
         return const [];
+    }
+
+    Future<APIResult<List<int>>> _fetchIDList(String url, {CancelToken? cancelToken}) async {
+        return safeGETRaw<List<int>>(
+            url,
+            (raw) {
+                final Uint8List bytes = raw;
+                final ByteData buffer = ByteData.sublistView(bytes);
+                final int count = bytes.length ~/ 4;
+
+                return [for (int i = 0; i < count; i++) buffer.getInt32(i * 4)];
+            },
+            options: Options(
+                responseType: ResponseType.bytes
+            ),
+            cancelToken: cancelToken,
+        );
+    }
+
+    void _log(Object? message) {
+        Nokulog.d("[NozomiAPI]: ${message.toString()}");
+    }
+
+    void _logError(String message, {Object? error, StackTrace? stackTrace}) {
+        Nokulog.e("[NozomiAPI]: $message", error: error, stackTrace: stackTrace);
     }
 }

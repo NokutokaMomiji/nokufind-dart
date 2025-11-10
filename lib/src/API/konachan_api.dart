@@ -4,17 +4,19 @@ import "package:dio/dio.dart";
 import "package:dio_http2_adapter/dio_http2_adapter.dart";
 import "package:html/parser.dart";
 import "package:intl/intl.dart";
+import "package:nokufind/src/API/api_tools.dart";
 
 import "../Utils/utils.dart";
 
-class KonachanAPI {
+class KonachanAPI extends BaseAPI{
     static const String _url = "https://konachan.com/";
 
-    final Dio _client = Dio()..httpClientAdapter = Http2Adapter(ConnectionManager(idleTimeout: const Duration(seconds: 15)));
     final _dateFormat = DateFormat("EEE MMM dd HH:mm:ss yyyy");
 
-    KonachanAPI() {
-        addSmartRetry(_client);
+    KonachanAPI() : super(
+        Dio()..httpClientAdapter = Http2Adapter(ConnectionManager(idleTimeout: const Duration(seconds: 15)))
+    ){
+        addSmartRetry(client);
     }
 
     Future<List<Map<String, dynamic>>> searchPosts(String tags,{int limit = 100, int page = 1}) async {
@@ -65,7 +67,7 @@ class KonachanAPI {
 
         final String url = (postID == null) ? "${_url}comment" : "${_url}post/show/$postID";
 
-        final Response<String> response = await _client.get(Uri.parse(url).toString(), queryParameters: params);
+        final Response<String> response = await client.get(Uri.parse(url).toString(), queryParameters: params);
         final document = parse(response.data!);
         final rawComments = document.getElementsByClassName("comment avatar-container");
 
@@ -130,7 +132,7 @@ class KonachanAPI {
     Future<dynamic> _makeRequest(String file, {Map<String, String>? params}) async {
         final String paramString = (params != null) ? mapToPairedString(params) : "";
         
-        final Response<String> response = await _client.get("$_url$file?$paramString");
+        final Response<String> response = await client.get("$_url$file?$paramString");
 
         if (response.data == null) {
             throw DioException(

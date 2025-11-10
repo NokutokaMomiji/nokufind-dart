@@ -1,3 +1,4 @@
+import 'dart:collection';
 import 'dart:typed_data';
 
 import 'package:characters/characters.dart';
@@ -6,7 +7,7 @@ import 'package:dio/dio.dart';
 import 'package:dio_smart_retry/dio_smart_retry.dart';
 import 'package:logger/logger.dart';
 
-const String userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36 OPR/109.0.0.0";
+const String userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36 OPR/119.0.0.0";
 const String pixivReferer = "https://app-api.pixiv.net/";
 
 enum NokulogMode {
@@ -72,9 +73,17 @@ class NokulogEvent {
     final Object? error;
     final StackTrace stackTrace;
 
-    NokulogEvent(this.eventType, this.message, {DateTime? time, this.error, StackTrace? stackTrace}) : time = DateTime.now(), stackTrace = StackTrace.current;
+    NokulogEvent(
+        this.eventType, 
+        this.message, {
+        DateTime? time, 
+        this.error, 
+        StackTrace? stackTrace
+    }) : time = time ?? DateTime.now(), stackTrace = stackTrace ?? StackTrace.current;
 
 }
+
+typedef NokulogCallback = void Function(NokulogEvent event); 
 
 class Nokulog {
     static NokulogMode mode = NokulogMode.base; 
@@ -85,13 +94,18 @@ class Nokulog {
         filter: ErrorFilter(),
         printer: PrettyPrinter()
     );
+    static final HashSet<NokulogCallback> _callbacks = HashSet<NokulogCallback>();
+
+    static void onEvent(NokulogCallback callback) {
+        _callbacks.add(callback);
+    }
 
     static void d(dynamic message, {DateTime? time, Object? error, StackTrace? stackTrace}) {
         _logger.d(message, time: time, error: error, stackTrace: stackTrace);
 
         if (mode == NokulogMode.errors || mode == NokulogMode.off) return;
 
-        log.add(
+        _addAndNotify(
             NokulogEvent(
                 NokulogEventType.debug,
                 message,
@@ -107,7 +121,7 @@ class Nokulog {
 
         if (mode == NokulogMode.errors || mode == NokulogMode.off) return;
 
-        log.add(
+        _addAndNotify(
             NokulogEvent(
                 NokulogEventType.info,
                 message,
@@ -123,7 +137,7 @@ class Nokulog {
 
         if (mode == NokulogMode.off) return;
 
-        log.add(
+        _addAndNotify(
             NokulogEvent(
                 NokulogEventType.warning,
                 message,
@@ -139,7 +153,7 @@ class Nokulog {
 
         if (mode == NokulogMode.off) return;
 
-        log.add(
+        _addAndNotify(
             NokulogEvent(
                 NokulogEventType.error,
                 message,
@@ -155,7 +169,7 @@ class Nokulog {
 
         if (mode == NokulogMode.off) return;
         
-        log.add(
+        _addAndNotify(
             NokulogEvent(
                 NokulogEventType.trace,
                 message,
@@ -164,6 +178,14 @@ class Nokulog {
                 stackTrace: stackTrace
             )
         );
+    }
+
+    static void _addAndNotify(NokulogEvent event) {
+        log.add(event);
+
+        for (final callback in _callbacks) {
+            callback(event);
+        }
     }
 }
 
@@ -187,6 +209,12 @@ class Dimensions {
     }
 
     Map<String, dynamic> toMap() => {
+        "x": x,
+        "y": y,
+        "alt": alt?.toMap()
+    };
+
+    Map<String, dynamic> toJson() => {
         "x": x,
         "y": y,
         "alt": alt?.toMap()

@@ -4,6 +4,7 @@ import "package:dio/dio.dart";
 import "package:dio_http2_adapter/dio_http2_adapter.dart";
 import "package:executor/executor.dart";
 import "package:html/dom.dart";
+import "package:nokufind/src/API/api_tools.dart";
 //import "package:intl/intl.dart";
 
 import "../Utils/utils.dart";
@@ -14,16 +15,14 @@ enum ImageType {
     image
 }
 
-class NHentaiAPI {
+class NHentaiAPI extends BaseAPI {
     static const String _url = "https://nhentai.net/api/";
     static const String _siteUrl = "https://nhentai.net/";
     static const String _imageUrl = "https://i1.nhentai.net/galleries/";
-    static const String _avatarUrl = "https://i5.nhentai.net/";
+    static const String _avatarUrl = "https://i.nhentai.net/";
     static const String _tinyImageUrl = "https://t1.nhentai.net/galleries/";
     static const String _randomUrl = "https://nhentai.net/random/";
     static const String _userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 OPR/116.0.0.0";
-
-    final Dio _client = Dio()..httpClientAdapter = Http2Adapter(ConnectionManager(idleTimeout: const Duration(seconds: 15)));
     //final _dateFormat = DateFormat("yyyy-MM-dd HH:mm:ss");
     
     final String cfClearance;
@@ -32,13 +31,15 @@ class NHentaiAPI {
 
     Map<String, String> defaultHeaders = {};
 
-    NHentaiAPI(this.cfClearance, this.csrfToken, this.sessionAffinity) {
+    NHentaiAPI(this.cfClearance, this.csrfToken, this.sessionAffinity) : super(
+        Dio()..httpClientAdapter = Http2Adapter(ConnectionManager(idleTimeout: const Duration(seconds: 15)))
+    ){
         defaultHeaders["User-Agent"] = _userAgent;
         defaultHeaders["Accept"] = "*/*";
         defaultHeaders["Connection"] = "keep-alive";
         defaultHeaders["Cookie"] = "cf_clearance=$cfClearance; csrftoken=$csrfToken; session-affinity=$sessionAffinity";
-        _client.options.headers = defaultHeaders;
-        addSmartRetry(_client);
+        client.options.headers = defaultHeaders;
+        addSmartRetry(client);
     }
 
     Future<List<Map<String, dynamic>>> searchPosts(String tags, {int limit = 25, int page = 1}) async {
@@ -56,7 +57,7 @@ class NHentaiAPI {
         int innerPage = page;
         final List<Map<String, dynamic>> rawPosts = [];
         final String requestPart = (tags.isEmpty) ? _siteUrl : "${_siteUrl}search/";
-        Response<String> response;
+        APIResult<String> response;
         try {
             while (rawPosts.length < limit) {
                 params["page"] = innerPage.toString();
@@ -66,7 +67,14 @@ class NHentaiAPI {
 
                 Nokulog.d(url);
                 
-                response = await _client.get(url.toString());
+                response = await safeGET(
+                    url.toString(),
+                    (data) => data    
+                );
+
+                if (response.isError) {
+                    return [];
+                }
 
                 final Document document = Document.html(response.data!);
 
@@ -131,7 +139,7 @@ class NHentaiAPI {
 
             return rawPosts;
         } catch (e, stackTrace) {
-            Nokulog.e("Failed to fetch posts matching \"$tags\".\n${_client.options.headers}", error: e, stackTrace: stackTrace);
+            Nokulog.e("Failed to fetch posts matching \"$tags\".\n${client.options.headers}", error: e, stackTrace: stackTrace);
             return rawPosts;
         }
     }
@@ -202,7 +210,7 @@ class NHentaiAPI {
         
         if (postID == null) {
             try {
-                final Response<String> response = await _client.get(_randomUrl);
+                final Response<String> response = await client.get(_randomUrl);
                 Nokulog.d(response.redirects.map((e) => e.toString()));
             } catch(e, stackTrace) {
                 Nokulog.e("Failed to fetch random post.", error: e, stackTrace: stackTrace);
@@ -294,10 +302,7 @@ class NHentaiAPI {
     }
 
     Future<dynamic> _makeRequest(String url, {Map<String, String>? params}) async {
-        final String paramString = (params != null) ? mapToPairedString(params) : "";
-        final Uri requestURL = Uri.parse("$url?$paramString");
-
-        final Response<String> response = await _client.get(requestURL.toString());
+        final Response<String> response = await client.get(url, queryParameters: params);
 
         if (response.data == null) {
             throw DioException(

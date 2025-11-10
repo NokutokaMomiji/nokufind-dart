@@ -4,16 +4,20 @@ import "package:dio/dio.dart";
 import "package:dio_http2_adapter/dio_http2_adapter.dart";
 import "package:html/parser.dart";
 import "package:intl/intl.dart";
+import "package:nokufind/src/API/api_tools.dart";
 
 import "../Utils/utils.dart";
 
-class YandereAPI {
+class YandereAPI extends BaseAPI {
     static const String _url = "https://yande.re/";
 
-    final Dio _client = Dio()..httpClientAdapter = Http2Adapter(ConnectionManager(idleTimeout: const Duration(seconds: 15)));
+    final Dio _client = Dio();
     final _dateFormat = DateFormat("EEE MMM dd HH:mm:ss yyyy");
 
-    YandereAPI() {
+    YandereAPI() : super(
+        Dio()
+    ){
+        addSmartRetry(client);
         addSmartRetry(_client);
     }
 
@@ -37,7 +41,8 @@ class YandereAPI {
             }
 
             return List<Map<String, dynamic>>.from(results);
-        } on DioException {
+        } catch(e, stackTrace) {
+            Nokulog.e("Failed to get posts.", error: e, stackTrace: stackTrace);
             return List<Map<String, dynamic>>.empty(growable: true);
         }
     }
@@ -49,7 +54,8 @@ class YandereAPI {
                 return null;
             }
             return result.first;
-        } on DioException {
+        } catch(e, stackTrace) {
+            Nokulog.e("Failed to get post.", error: e, stackTrace: stackTrace);
             return null;
         }
     }
@@ -133,9 +139,8 @@ class YandereAPI {
 
     Future<dynamic> _makeRequest(String file, {Map<String, String>? params}) async {
         final String paramString = (params != null) ? mapToPairedString(params) : "";
-        final Uri requestURL = Uri.parse("$_url$file?$paramString");
-        
-        final Response<String> response = await _client.get(requestURL.toString());
+
+        final Response<String> response = await _client.get("$_url$file?$paramString");
 
         if (response.data == null) {
             throw DioException(

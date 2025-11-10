@@ -46,14 +46,14 @@ class PixivFinder implements ISubfinder {
         final int artistID = postData["user"]["id"];
 
         if (!originalTags.contains(artistName)) {
-            tags.add(Tag(artistName));
+            tags.add(Tag(artistName, type: TagType.artist));
         }
 
         if (postData["illust_ai_type"] == 2) {
             tags.add(Tag("AI-generated"));
         }
 
-        tags.add(Tag("artist:$artistID"));
+        tags.add(Tag("artist:$artistID", type: TagType.artist));
 
         _artists[artistName] = artistID;
 
@@ -69,6 +69,7 @@ class PixivFinder implements ISubfinder {
     
 
         // List<int>.from([postData["width"], postData["height"]])
+        //print("${postData["title"]} | ${postData["x_restrict"]} | ${postData["restrict"]}");
         return Post(
             postID: postData["id"], 
             tags: tags, 
@@ -78,7 +79,7 @@ class PixivFinder implements ISubfinder {
             source: "pixiv",
             preview: postData["image_urls"]["medium"], 
             md5: null, 
-            rating: (anyContains(tags, "R-18") || anyContains(tags, "R-18G")) ? Rating.explicit : Rating.unknown, 
+            rating: (anyContains(tags, "R-18") || anyContains(tags, "R-18G") || postData["restriction_attributes"] != null) ? Rating.explicit : Rating.unknown, 
             parentID: null, 
             dimensions: List<Dimensions>.filled(urls.length, Dimensions(postData["width"], postData["height"])), 
             poster: postData["user"]["name"],
@@ -161,15 +162,18 @@ class PixivFinder implements ISubfinder {
 
         completer.complete(searchFuture);
 
-        return completer.operation.value;
+        return (await completer.operation.valueOrCancellation()) ?? <Post>[];
     }
 
     @override
     Future<List<Post>> searchPostsAdvanced(String tags, {String optionalTags = "", String blacklist = "", int limit = 100, int? page}) {
         final List<String> splitTags = parseTagsWithQuotes(tags);
-        final Iterable<String> splitBlacklist = parseTagsWithQuotes(tags).map((element) => "-$element");
-        
-        return searchPosts([...splitTags, ...splitBlacklist].join(" "));
+        final Iterable<String> splitBlacklist = parseTagsWithQuotes(blacklist).map((element) => "-$element").where((element) => element.isNotEmpty);
+        final query = [...splitTags, ...splitBlacklist].join(" ");
+
+        Nokulog.d("[Pixiv]: query: \"$query\"");
+
+        return searchPosts(query.trim());
     }
 
     @override
@@ -290,10 +294,29 @@ class PixivFinder implements ISubfinder {
         lastCompleter.operation.cancel();
     }
 
+    Future<List<Post>> getRecommendedPosts({int page = 0}) async {
+        if (!await _tryAuth()) return [];
+
+        final offset = page * 30;
+        final recommended = await _client.illustRecommended(offset: offset, includeRankingIllusts: true);
+        final fromFollowing = await _client.illustFollow(restrict: Restrict.private);
+
+        final recommendedIllusts = (recommended["illusts"] as List?) ?? [];
+        final fromFollowingIllusts = (fromFollowing["illusts"] as List?) ?? [];
+
+        final illusts = recommendedIllusts + fromFollowingIllusts;
+
+        if (illusts.isEmpty) return [];
+    
+        return illusts.map((element) => toPost(Map<String, dynamic>.from(element))).toList();
+    }
+
     Future<List<Post>> _getAllPosts(String tags, CancelableCompleter completer, {int limit = 30, int? page, bool canUseExecutor = false}) async {
         if (completer.isCanceled) return [];
 
         page = (page == null || page <= 0) ? 1 : page;
+
+        Nokulog.d("[Pixiv]: tags: \"$tags\"");
 
         if (tags.contains("artist:")) {
             return _getPostsWithArtist(tags, completer, limit: limit, page: page);
@@ -306,10 +329,10 @@ class PixivFinder implements ISubfinder {
         int currentPage = page;
 
         int? artistID = _artists[tags];
-        bool shouldCheckForArtist = (artistID == null);
-        final bool lowerQuality = _config.getConfig<bool>("use_lower_quality", defaultValue: false) == true;
+        bool shouldCheckForArtist = (artistID == null && tags.isNotEmpty);
+        final lowerQuality = false;
 
-        if (!shouldCheckForArtist) {
+        if (!shouldCheckForArtist && tags.isNotEmpty) {
             Nokulog.i("Artist with name \"$tags\" ($artistID) is recorded in artist registry.");
         }
 
@@ -331,8 +354,24 @@ class PixivFinder implements ISubfinder {
                     final int currentOffset = (i * defaultSize);
                     Map<String, dynamic> results;
                     try {
-                        results = (artistID == null) ? ((tags.isEmpty) ? await _client.illustRanking() : await _client.searchIllust(tags, offset: currentOffset)) 
-                                : await _client.userIllusts(artistID, offset: currentOffset);
+                        if (artistID != null) {
+                            Nokulog.d("Artist ID is $artistID, searching for illustrations.");
+                            results = await _client.userIllusts(
+                                artistID,
+                                offset: currentOffset,
+                            );
+                        } else if (tags.isNotEmpty) {
+                            Nokulog.d("Tags are \"$tags\", searching for illustrations.");
+                            results = await _client.searchIllust(
+                                tags,
+                                offset: currentOffset,
+                            );
+                        } else {
+                            Nokulog.d("Tags are empty, searching for illustrations from followed users.");
+                            results = await _client.illustRanking(
+                                offset: currentOffset,
+                            );
+                        }
                     } catch (e, stackTrace) {
                         Nokulog.e("Failed to fetch Pixiv posts.", error: e, stackTrace: stackTrace);
                         return;
@@ -348,12 +387,7 @@ class PixivFinder implements ISubfinder {
 
                     Nokulog.d("[nokufind.PixivFinder (Executor)]: Found ${rawPosts.length}.");
 
-                    currentPosts.addAll(rawPosts.map((post) {
-                        if (lowerQuality) {
-                            post["use_lower_quality"] = true;
-                        }
-                        return toPost(post);
-                    }));
+                    currentPosts.addAll(rawPosts.map(toPost));
 
                     Nokulog.d("[nokufind.PixivFinder (Executor)]: Currently at ${currentPosts.length} posts.");
                 });
@@ -384,8 +418,26 @@ class PixivFinder implements ISubfinder {
 
             Map<String, dynamic> results;
             try {
-                results = (artistID == null) ? ((tags.isEmpty) ? await _client.illustRanking() : await _client.searchIllust(tags, offset: currentOffset)) 
-                        : await _client.userIllusts(artistID, offset: currentOffset);
+                if (artistID != null) {
+                    Nokulog.d("Artist ID is $artistID, searching for illustrations.");
+                    results = await _client.userIllusts(
+                        artistID,
+                        offset: currentOffset,
+                    );
+                } else if (tags.isNotEmpty) {
+                    Nokulog.d("Tags are \"$tags\", searching for illustrations.");
+                    results = await _client.searchIllust(
+                        tags,
+                        offset: currentOffset,
+                    );
+                } else {
+                    Nokulog.d("Tags are empty, searching for illustrations from followed users.");
+                    results = await _client.illustRanking(
+                        offset: currentOffset,
+                    );
+
+                    Nokulog.d("Results length: ${results.length}");
+                }
             } catch (e, stackTrace) {
                 Nokulog.e("Failed to fetch Pixiv posts.", error: e, stackTrace: stackTrace);
                 tries++;
@@ -440,12 +492,7 @@ class PixivFinder implements ISubfinder {
             Nokulog.d("[nokufind.PixivFinder]: Found ${rawPosts.length}.");
 
             currentSize = rawPosts.length;
-            currentPosts.addAll(rawPosts.map((post) {
-                if (lowerQuality) {
-                    post["use_lower_quality"] = true;
-                }
-                return toPost(post);
-            }));
+            currentPosts.addAll(rawPosts.map(toPost));
 
             Nokulog.d("[nokufind.PixivFinder]: Currently at ${currentPosts.length} posts.");
 

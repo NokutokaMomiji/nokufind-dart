@@ -89,7 +89,7 @@ class Tag {
 
     @override
     String toString() {
-        return original;
+        return (translated.isNotEmpty) ? "$original ($translated)" : original;
     }
 }
 
@@ -158,6 +158,7 @@ class Post {
             authors: List<String>.from(jsonData["authors"]),
             source: jsonData["source"],
             preview: jsonData["preview"],
+            sample: jsonData["sample"],
             md5: List<String>.from(jsonData["md5"]),
             rating: Rating.values[jsonData["rating"]],
             parentID: jsonData["parent_id"],
@@ -185,8 +186,9 @@ class Post {
           required List<String> images, 
           List<String>? altImages,
           required List<String> authors, 
-          required String source, 
-          required String preview, 
+          required String source,
+          required String preview,
+          String? sample, 
           required List<String>? md5, 
           required dynamic rating, 
           required int? parentID, 
@@ -214,7 +216,9 @@ class Post {
             throw TypeError();
         }).toList();
 
-        _updateSpecialTags(typedTags.where((element) => (element.type != TagType.general || element.translated.isNotEmpty) && element.original != "bow"));
+        if (source != "nhentai") {
+            _updateSpecialTags(typedTags.where((element) => (element.type != TagType.general || element.translated.isNotEmpty) && element.original != "bow"));
+        }
 
         postData["post_id"] = postID;
         postData["tags"] = typedTags;
@@ -243,6 +247,7 @@ class Post {
         postData["authors"] = (authors.isNotEmpty) ? authors : typedTags.where((tag) => tag.type == TagType.artist).map((element) => element.original).toList();
         postData["source"] = source;
         postData["preview"] = preview;
+        postData["sample"] = sample ?? preview;
         postData["md5"] = md5 ?? <String>[];
         postData["rating"] = (rating is Rating) ? rating : Post.getRating(rating);
         postData["parent_id"] = parentID;
@@ -365,6 +370,7 @@ class Post {
         return jsonEncode(data, toEncodable: (obj) {
             if (obj is Rating) return obj.index;
             if (obj is Tag) return obj.toMap();
+            if (obj is Dimensions) return obj.toMap();
             return obj;
         });
     }
@@ -484,6 +490,8 @@ class Post {
     String get source => postData["source"];
     
     String get preview => postData["preview"];
+
+    String get sample => postData["sample"];
     
     List<String> get md5 => postData["md5"];
     

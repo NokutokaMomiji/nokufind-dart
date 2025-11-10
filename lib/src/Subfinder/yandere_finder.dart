@@ -39,7 +39,8 @@ class YandereFinder implements ISubfinder {
             altImages: [jpegImageURL],
             authors: [], //(postData["tag_string_artist"] as String).split(" "), 
             source: "yande.re", 
-            preview: postData["preview_url"], 
+            preview: postData["preview_url"],
+            sample: postData["sample_url"],
             md5: [postData["md5"]], 
             rating: postData["rating"], 
             parentID: postData["parent_id"], 
@@ -78,7 +79,7 @@ class YandereFinder implements ISubfinder {
     }
 
     static Description toDescription(Map<String, dynamic> descriptionData) {
-        throw UnimplementedError("Hypnohub has no descriptions. Do not use toDescription.");
+        throw UnimplementedError("Yande.re has no descriptions. Do not use toDescription.");
     }
 
     final YandereAPI _client = YandereAPI();
@@ -105,7 +106,7 @@ class YandereFinder implements ISubfinder {
 
         completer.complete(searchFuture);
 
-        return completer.operation.value;
+        return (await completer.operation.valueOrCancellation()) ?? <Post>[];
     }
 
     @override

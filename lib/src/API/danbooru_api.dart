@@ -2,15 +2,20 @@ import "dart:convert";
 
 import "package:dio/dio.dart";
 import "package:dio_http2_adapter/dio_http2_adapter.dart";
+import "package:nokufind/src/API/api_tools.dart";
 import "../Utils/utils.dart";
 
-class DanbooruAPI {
+class DanbooruAPI extends BaseAPI{
     static const String _url = "https://danbooru.donmai.us/";
-    
-    final Dio _client = Dio()..httpClientAdapter = Http2Adapter(ConnectionManager(idleTimeout: const Duration(seconds: 15)));
 
-    DanbooruAPI() {
-        addSmartRetry(_client);
+    DanbooruAPI() : super(
+        Dio()..httpClientAdapter = Http2Adapter(ConnectionManager(idleTimeout: const Duration(seconds: 15)))
+    ){
+        addSmartRetry(client);
+
+        errors.listen((data) {
+            _logAPIError(data);
+        });
     }
 
     Future<List<Map<String, dynamic>>> searchPosts(String tags,{int limit = 200, int page = 1}) async {
@@ -24,8 +29,12 @@ class DanbooruAPI {
         };
 
         try {
-            final List<dynamic> results = await _makeRequest("posts.json", params: params) as List<dynamic>;
+            final request = await _makeRequest("posts.json", params: params);
             
+            if (request.isError) return [];
+
+            final results = List.from(request.data);
+
             for (int i = 0; i < results.length; i++) {
                 results[i] = Map<String, dynamic>.from(results[i]);
             }
@@ -39,7 +48,11 @@ class DanbooruAPI {
 
     Future<Map<String, dynamic>?> getPost(int postID) async {
         try {
-            return await _makeRequest("posts/$postID.json") as Map<String, dynamic>;
+            final request = await _makeRequest("posts/$postID.json");
+
+            if (request.isError) return null;
+
+            return Map<String, dynamic>.from(request.data);
         } catch (e, stackTrace) {
             Nokulog.e("Failed to fetch post $postID.", error: e, stackTrace: stackTrace);
             return null;
@@ -59,7 +72,11 @@ class DanbooruAPI {
             if (postID != null) {
                 params["search[post_id]"] = postID.toString();
             }
-            final List<dynamic> results = await _makeRequest("comments.json", params: params) as List<dynamic>;
+            final request = await _makeRequest("comments.json", params: params);
+
+            if (request.isError) return [];
+
+            final results = List<dynamic>.from(request.data);
 
             for (int i = 0; i < results.length; i++) {
                 results[i] = Map<String, dynamic>.from(results[i]);
@@ -79,7 +96,11 @@ class DanbooruAPI {
         }
         
         try {
-            return await _makeRequest("comments/$commentID.json") as Map<String, dynamic>;
+            final request = await _makeRequest("comments/$commentID.json");
+
+            if (request.isError) return null;
+
+            return Map<String, dynamic>.from(request.data);
         } catch (e, stackTrace) {
             Nokulog.e("Failed to fetch comment with ID $commentID.", error: e, stackTrace: stackTrace);
             return null;
@@ -92,8 +113,12 @@ class DanbooruAPI {
         }
 
         try {
-            final List<dynamic> results = await _makeRequest("notes.json", params: { "search[post_id]": postID.toString() }) as List<dynamic>;
+            final request = await _makeRequest("notes.json", params: { "search[post_id]": postID.toString() });
         
+            if (request.isError) return [];
+
+            final results = List<dynamic>.from(request.data);
+
             for (int i = 0; i < results.length; i++) {
                 results[i] = Map<String, dynamic>.from(results[i]);
             }
@@ -111,7 +136,7 @@ class DanbooruAPI {
         }
         
         try {
-            return await _makeRequest("posts/$postID/artist_commentary.json") as Map<String, dynamic>;
+            return ((await _makeRequest("posts/$postID/artist_commentary.json")).data ?? {}) as Map<String, dynamic>;
         } catch (e, stackTrace) {
             if (e is DioException) {
                 // This means that the commentary simply didn't exist.
@@ -126,14 +151,42 @@ class DanbooruAPI {
         }
     }
 
-    Future<dynamic> _makeRequest(String file, {Map<String, String>? params}) async {
+    void _logError(String message, {Object? error, StackTrace? stackTrace}) {
+        Nokulog.e("[DanbooruAPI]: $message", error: error, stackTrace: stackTrace);
+    }
+
+    void _logAPIError(APIError error) {
+        final buffer = StringBuffer();
+
+        buffer.writeln("An error has occurred whilst handling an API request.");
+        buffer.writeln("    > [Type]: ${error.type.name}");
+        buffer.writeln("    > [Message]: ${error.message}");
+        buffer.write  ("    > [URL]: ${error.url}");
+
+        // Yes, the space above is cursed, but this is more visually pleasant.
+
+        _logError(buffer.toString(), error: error.exception, stackTrace: error.stackTrace);
+    } 
+
+    Future<APIResult<dynamic>> _makeRequest(String file, {Map<String, String>? params}) async {
+        return safeGET(
+            "$_url$file", 
+            (data) => jsonDecode(data),
+            queryParameters: params,
+            options: Options(
+                headers: {
+                    "User-Agent": userAgent
+                }
+            )
+        );
+
         final String paramString = (params != null) ? mapToPairedString(params) : "";
         final Uri requestURL = Uri.parse("$_url$file?$paramString");
         Nokulog.d(requestURL.toString());
         
-        _client.options.validateStatus = (status) => true;
-        _client.options.headers["User-Agent"] = userAgent;
-        final Response<String> response = await _client.get(requestURL.toString());
+        client.options.validateStatus = (status) => true;
+        client.options.headers["User-Agent"] = userAgent;
+        final Response<String> response = await client.get(requestURL.toString());
 
         if (response.data == null) {
             throw DioException(

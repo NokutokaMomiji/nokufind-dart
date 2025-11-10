@@ -40,7 +40,8 @@ class Rule34Finder implements ISubfinder {
             altImages: (sampleURL != null) ? [sampleURL] : null,
             authors: List<String>.from(postData["authors"]), //(postData["tag_string_artist"] as String).split(" "), 
             source: "rule34", 
-            preview: postData["preview_url"], 
+            preview: postData["preview_url"],
+            sample: postData["sample_url"],
             md5: [postData["hash"]], 
             rating: postData["rating"], 
             parentID: (postData["parent_id"] != 0) ? postData["parent_id"] : null, 
@@ -89,6 +90,10 @@ class Rule34Finder implements ISubfinder {
 
     Rule34Finder() : _client = Rule34API();
 
+    void auth(String apiKey, int userID) {
+        _client.auth(apiKey: apiKey, userID: userID);
+    }
+
     @override
     Future<List<Post>> searchPosts(String tags, {int limit = 1000, int? page}) async {
         page = (page == null) ? 0 : page;
@@ -106,7 +111,7 @@ class Rule34Finder implements ISubfinder {
 
         completer.complete(searchFuture);
 
-        return completer.operation.value;
+        return (await completer.operation.valueOrCancellation()) ?? <Post>[];
     }
 
     @override

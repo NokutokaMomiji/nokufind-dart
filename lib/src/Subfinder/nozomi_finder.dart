@@ -75,7 +75,7 @@ class NozomiFinder implements ISubfinder {
 
         final List<String> queries;
         if (splitOptionalTags.isEmpty) {
-            // Only base tags + blacklist
+            // Only base tags + blacklist.
             queries = [[
                     ...baseTags,
                     ...blacklistTags,
@@ -84,7 +84,7 @@ class NozomiFinder implements ISubfinder {
                 ).join(" "),
             ];
         } else {
-            // One query for each optional tag
+            // One query for each optional tag.
             queries = splitOptionalTags.map((optTag) {
                 return [
                     ...baseTags,
@@ -121,7 +121,7 @@ class NozomiFinder implements ISubfinder {
 
         completer.complete(rawPosts);
 
-        return completer.operation.value;
+        return (await completer.operation.valueOrCancellation()) ?? <Post>[];
     }
 
     @override

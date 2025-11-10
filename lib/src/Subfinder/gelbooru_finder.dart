@@ -37,7 +37,8 @@ class GelbooruFinder implements ISubfinder {
             altImages: (sampleURL != null) ? [sampleURL] : null,
             authors: [], //(postData["tag_string_artist"] as String).split(" "), 
             source: "gelbooru", 
-            preview: postData["preview_url"], 
+            preview: postData["preview_url"],
+            sample: sampleURL,
             md5: [postData["md5"]], 
             rating: postData["rating"], 
             parentID: (postData["parent_id"] != 0) ? postData["parent_id"] : null, 
@@ -84,6 +85,10 @@ class GelbooruFinder implements ISubfinder {
     final _config = SubfinderConfiguration();
     final List<CancelableCompleter> _completers = [];
 
+    void auth(String apiKey, int userID) {
+        _client.auth(apiKey: apiKey, userID: userID);
+    }
+
     @override
     Future<List<Post>> searchPosts(String tags, {int limit = 100, int? page}) async {
         page = (page == null) ? 0 : page;
@@ -102,7 +107,7 @@ class GelbooruFinder implements ISubfinder {
 
         completer.complete(searchFuture);
 
-        return completer.operation.value;
+        return (await completer.operation.valueOrCancellation()) ?? <Post>[];
     }
 
     @override
@@ -127,7 +132,7 @@ class GelbooruFinder implements ISubfinder {
 
         completer.complete(searchFuture);
 
-        return completer.operation.value;
+        return (await completer.operation.valueOrCancellation()) ?? <Post>[];
     }
 
     @override

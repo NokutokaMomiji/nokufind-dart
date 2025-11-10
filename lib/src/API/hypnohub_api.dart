@@ -6,21 +6,23 @@ import "package:executor/executor.dart";
 import "package:html/dom.dart";
 import "package:html/parser.dart";
 import "package:intl/intl.dart";
+import "package:nokufind/src/API/api_tools.dart";
 import "package:xml/xml.dart";
 import "package:html_unescape/html_unescape_small.dart";
 
 import "../Utils/utils.dart";
 
-class HypnohubApi {
+class HypnohubApi extends BaseAPI {
     static const String _url = "https://hypnohub.net/";
     static const String _siteUrl = "https://hypnohub.net/";
     static final HtmlUnescape _unescape = HtmlUnescape();
 
-    final Dio _client = Dio()..httpClientAdapter = Http2Adapter(ConnectionManager(idleTimeout: const Duration(seconds: 15)));
     final _dateFormat = DateFormat("yyyy-MM-dd HH:mm:ss");
 
-    HypnohubApi() {
-        addSmartRetry(_client);
+    HypnohubApi() : super(
+        Dio()..httpClientAdapter = Http2Adapter(ConnectionManager(idleTimeout: const Duration(seconds: 15)))
+    ){
+        addSmartRetry(client);
     }
 
     Future<List<Map<String, dynamic>>> searchPosts(String tags,{int limit = 1000, int page = 0}) async {
@@ -122,7 +124,7 @@ class HypnohubApi {
         final String paramString = mapToPairedString(params);
         final Uri requestURL = Uri.parse("${_url}index.php?$paramString");
         
-        final Response<String> content = await _client.get(requestURL.toString());
+        final Response<String> content = await client.get(requestURL.toString());
     
         final XmlDocument document = XmlDocument.parse(content.data!);
 
@@ -176,13 +178,13 @@ class HypnohubApi {
         final Uri requestURL = Uri.parse("${_siteUrl}index.php?$paramString");
         final Uri otherURL = Uri.parse("${_siteUrl}index.php?page=history&type=page_notes&id=$postID");
 
-        _client.options.headers["cookies"] = mapToPairedString(cookies, separator: ';');        
+        client.options.headers["cookies"] = mapToPairedString(cookies, separator: ';');        
         
         try {
-            _client.options.headers["User-Agent"] = userAgent;
-            final Response<String> content = await _client.get(requestURL.toString());
-            final Response<String> otherData = await _client.get(otherURL.toString());
-            _client.options.headers.remove("User-Agent");
+            client.options.headers["User-Agent"] = userAgent;
+            final Response<String> content = await client.get(requestURL.toString());
+            final Response<String> otherData = await client.get(otherURL.toString());
+            client.options.headers.remove("User-Agent");
 
             final Document document = parse(content.data!);
             final Document otherDoc = parse(otherData.data!);
@@ -237,7 +239,7 @@ class HypnohubApi {
         final Uri requestURL = Uri.parse("$_url$file?$paramString");
         Nokulog.i("requestURL: ${requestURL.toString()}");
         
-        final Response<String> response = await _client.get(requestURL.toString());
+        final Response<String> response = await client.get(requestURL.toString());
         
         if (response.data == null) {
             throw DioException(

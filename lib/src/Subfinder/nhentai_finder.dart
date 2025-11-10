@@ -59,6 +59,7 @@ class NHentaiFinder implements ISubfinder {
             creatorID: commentData["creator_id"],
             creator: commentData["creator"] ?? "User ${commentData['creator_id']}",
             body: commentData["body"], 
+            creatorAvatar: commentData["creator_avatar"],
             source: "nhentai",
             createdAt: commentData["created_at"] as DateTime
         );
@@ -119,7 +120,7 @@ class NHentaiFinder implements ISubfinder {
 
         completer.complete(searchFuture);
 
-        return completer.operation.value;
+        return (await completer.operation.valueOrCancellation()) ?? <Post>[];
     }
 
     @override
@@ -143,7 +144,7 @@ class NHentaiFinder implements ISubfinder {
 
         completer.complete(searchFuture);
 
-        return completer.operation.value;
+        return (await completer.operation.valueOrCancellation()) ?? <Post>[];
     }
 
     @override

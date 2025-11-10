@@ -4,22 +4,26 @@ import "dart:typed_data";
 import "package:dio/dio.dart";
 import "package:dio_http2_adapter/dio_http2_adapter.dart";
 import "package:executor/executor.dart";
+import "package:nokufind/src/API/api_tools.dart";
 import "package:nokufind/src/Utils/hitomi_utils.dart";
 
 import "../Utils/utils.dart";
 
-class HitomiAPI {
+class HitomiAPI extends BaseAPI {
     static const String _url = "https://ltn.gold-usergeneratedcontent.net/";
     static const String _galleryUrl = "https://ltn.gold-usergeneratedcontent.net/galleries/";
     static const List<String> _validTagTypes = ["character", "series", "artist", "group", "type"];
 
-    final Dio _client = Dio()..httpClientAdapter = Http2Adapter(ConnectionManager(idleTimeout: const Duration(seconds: 15)));
     static Common? _common;
     bool preferWebp;
 
-    HitomiAPI({this.preferWebp = true}) {
-        addSmartRetry(_client);
+    HitomiAPI({this.preferWebp = true}) : super(
+        Dio()..httpClientAdapter = Http2Adapter(ConnectionManager(idleTimeout: const Duration(seconds: 15)))
+    ) {
+        addSmartRetry(client);
         configureCommon();
+
+        errors.listen(_logAPIError);
     }
 
     Future<List<Map<String, dynamic>>> searchPosts(String tags, {int limit = 100, int page = 0}) async {
@@ -69,22 +73,22 @@ class HitomiAPI {
         Nokulog.d(tagList);
 
 
-        final oldHeaders = Map<String, dynamic>.from(_client.options.headers);        
-        _client.options.responseType = ResponseType.bytes;
+        final oldHeaders = Map<String, dynamic>.from(client.options.headers);        
+        client.options.responseType = ResponseType.bytes;
 
         final Map<String, List<int>> results = {};
 
         final int byteStart = (page - 1) * limit * 4;
         final int byteEnd = byteStart + limit * 4 - 1;
 
-        _client.options.headers["Range"] = "bytes=$byteStart-";
+        client.options.headers["Range"] = "bytes=$byteStart-";
 
         // If we only have a singular file, there is no problem with limiting it to the amount of posts we seek.
         if (tagList.length == 1) {
-            _client.options.headers["Range"] += "$byteEnd";
+            client.options.headers["Range"] += "$byteEnd";
         }
 
-        Nokulog.d(_client.options.headers["Range"]);
+        Nokulog.d(client.options.headers["Range"]);
 
         final Executor tagExecutor = Executor(concurrency: 15);
 
@@ -96,31 +100,15 @@ class HitomiAPI {
             
             tagExecutor.scheduleTask(() async {
                 try {
-                    Nokulog.d("Requesting $_url$tag");
-                    final Response<Uint8List> response = await _client.get("$_url$tag");
+                    final response = await _fetchIDList("$_url$tag");
 
-                    Nokulog.d("Response: ${response.statusCode}");
-                    final Uint8List? data = response.data;
-
-                    if (data == null) {
-                        Nokulog.e("Data for tag \"$tag\" was null.");
-                        return null;
+                    if (response.isError) {
+                        return;
                     }
 
-                    final int totalItems = data.length ~/ 4;
-
-                    if (totalItems == 0) {
-                        return null;
-                    }
-
-                    final buffer = ByteData.sublistView(data);
-                    for (int i = 0; i < totalItems; i++) {
-                        final int value = buffer.getInt32(i * 4);
-                        results[tag]!.add(value);
-                    }
-
+                    results[tag]!.addAll(response.data!);
                 } catch (e, stackTrace) {
-                    Nokulog.e("Failed to fetch \"$tag\".", error: e, stackTrace: stackTrace);
+                    _logError("Failed to fetch \"$tag\".", error: e, stackTrace: stackTrace);
                 }
             });
         }
@@ -139,16 +127,14 @@ class HitomiAPI {
             filteredPosts = filteredPosts.sublist(0, limit);
         }
 
-        Nokulog.d("filteredPosts: ${filteredPosts.length}");
-
         if (filteredPosts.isEmpty) {
             return [];
         }
 
         final List<Map<String, dynamic>> posts = [];
 
-        _client.options.headers = oldHeaders;
-        _client.options.responseType = ResponseType.plain;
+        client.options.headers = oldHeaders;
+        client.options.responseType = ResponseType.plain;
 
         final Executor executor = Executor(concurrency: 15);
 
@@ -163,27 +149,31 @@ class HitomiAPI {
         await executor.join(withWaiting: true);
         await executor.close();
 
-        Nokulog.d("total posts: ${posts.length}");
-
         return posts;
     }
 
     Future<Map<String, dynamic>?> getPost(int postID, {bool withGender = true}) async {
         if (postID <= 0) {
-            Nokulog.e("Post ID cannot be a value lower or equal to 0. Value: $postID");
+            _logError("Post ID cannot be a value lower or equal to 0. Value: $postID");
             return null;
         }
 
         Map<String, dynamic> jsonData = {};
 
         try {
-            _client.options.responseType = ResponseType.plain;
+            client.options.responseType = ResponseType.plain;
 
-            final Response<String> response = await _client.get("$_galleryUrl$postID.js");
+            final response = await safeGET(
+                "$_galleryUrl$postID.js",
+                (data) => data
+            );
+
+            if (response.isError) return null;
+
             final String? rawData = response.data;
             
             if (rawData == null || !rawData.contains("var galleryinfo = ")) {
-                Nokulog.e("Either rawData is null or it doesn't contain valid info.");
+                _logError("Either rawData is null or it doesn't contain valid info.");
                 return null;
             }
 
@@ -275,8 +265,8 @@ class HitomiAPI {
 
 
         } catch (e, stacktrace) {
-            Nokulog.e("Failed to fetch post with ID $postID.", error: e, stackTrace: stacktrace);
-            Nokulog.e(jsonEncode(jsonData), error: e, stackTrace: stacktrace);
+            _logError("Failed to fetch post with ID $postID.", error: e, stackTrace: stacktrace);
+            _logError(jsonEncode(jsonData), error: e, stackTrace: stacktrace);
             return null;
         }
     }
@@ -296,7 +286,7 @@ class HitomiAPI {
     Future<void> configureCommon() async {
         for (int i = 0; i < 10; i++) {
             try {
-                final Response<String> ggreq = await _client.get(
+                final Response<String> ggreq = await client.get(
                     "https://ltn.gold-usergeneratedcontent.net/gg.js",
                     options: Options(
                         responseType: ResponseType.plain
@@ -305,8 +295,42 @@ class HitomiAPI {
                 _common = Common(ggreq.data!);
                 return;
             } catch (e, stackTrace) {
-                Nokulog.e("Failed to fetch gg.js.", error: e, stackTrace: stackTrace);
+                _logError("Failed to fetch gg.js.", error: e, stackTrace: stackTrace);
             }
         }
     }
+
+    Future<APIResult<List<int>>> _fetchIDList(String url, {CancelToken? cancelToken}) async {
+        return safeGETRaw<List<int>>(
+            url,
+            (raw) {
+                final Uint8List bytes = raw;
+                final ByteData buffer = ByteData.sublistView(bytes);
+                final int count = bytes.length ~/ 4;
+
+                return [for (int i = 0; i < count; i++) buffer.getInt32(i * 4)];
+            },
+            options: Options(
+                responseType: ResponseType.bytes
+            ),
+            cancelToken: cancelToken,
+        );
+    }
+
+    void _logError(String message, {Object? error, StackTrace? stackTrace}) {
+        Nokulog.e("[HitomiAPI]: $message", error: error, stackTrace: stackTrace);
+    }
+
+    void _logAPIError(APIError error) {
+        final buffer = StringBuffer();
+
+        buffer.writeln("An error has occurred whilst handling an API request.");
+        buffer.writeln("    > [Type]: ${error.type.name}");
+        buffer.writeln("    > [Message]: ${error.message}");
+        buffer.write  ("    > [URL]: ${error.url}");
+
+        // Yes, the space above is cursed, but this is more visually pleasant.
+
+        _logError(buffer.toString(), error: error.exception, stackTrace: error.stackTrace);
+    } 
 }

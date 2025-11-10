@@ -6,12 +6,13 @@ import "package:executor/executor.dart";
 import "package:html/dom.dart";
 import "package:html/parser.dart";
 import "package:intl/intl.dart";
+import "package:nokufind/src/API/api_tools.dart";
 import "package:xml/xml.dart";
 import "package:html_unescape/html_unescape_small.dart";
 
 import "../Utils/utils.dart";
 
-class SafebooruApi {
+class SafebooruApi extends BaseAPI {
     static const String _url = "https://safebooru.org/";
     static const String _siteUrl = "https://safebooru.org/";
     static final HtmlUnescape _unescape = HtmlUnescape();
@@ -19,7 +20,9 @@ class SafebooruApi {
     final Dio _client = Dio()..httpClientAdapter = Http2Adapter(ConnectionManager(idleTimeout: const Duration(seconds: 15)));
     final _dateFormat = DateFormat("yyyy-MM-dd HH:mm:ss");
 
-    SafebooruApi() {
+    SafebooruApi() : super(
+        Dio()..httpClientAdapter = Http2Adapter(ConnectionManager(idleTimeout: const Duration(seconds: 15)))
+    ){
         addSmartRetry(_client);
     }
 

@@ -176,7 +176,7 @@ class Finder {
 
         completer.complete(searchFuture);
 
-        return completer.operation.value;
+        return (await completer.operation.valueOrCancellation()) ?? <Post>[];
     }
 
     Future<List<Post>> _multipleFinderSearch(String tags, CancelableCompleter completer, Executor executor, {int limit = 100, int? page}) async {
@@ -314,7 +314,7 @@ class Finder {
 
         completer.complete(searchFuture);
 
-        return completer.operation.value;
+        return (await completer.operation.valueOrCancellation()) ?? <Post>[];
     }
 
     Future<List<Post>> _multipleFinderSearchAdvanced(

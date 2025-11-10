@@ -12,75 +12,6 @@ import "../post.dart";
 import "../comment.dart";
 import "../note.dart";
 
-/// Converts DText-formatted strings into HTML.
-///
-/// Supports tags:
-/// [b], [i], [u], [s], [tn], [spoiler], [nodtext], [code], [br],
-/// links in the form "text":[url], [hr], [quote], [expand],
-/// and basic table tags ([table], [thead], [tbody], [tr], [th], [td], [colgroup], [col]).
-
-// Regexes created from [https://danbooru.donmai.us/wiki_pages/help:dtext]
-final List<(RegExp, String)> _dtextReplacements = [
-    (RegExp(r"\[b\](.*?)\[/b\]", dotAll: true), "<strong>\$1</strong>"),
-    (RegExp(r"\[i\](.*?)\[/i\]", dotAll: true), "<em>\$1</em>"),
-    (RegExp(r"\[u\](.*?)\[/u\]", dotAll: true), "<u>\$1</u>"),
-    (RegExp(r"\[s\](.*?)\[/s\]", dotAll: true), "<s>\$1</s>"),
-    (RegExp(r"\[tn\](.*?)\[/tn\]", dotAll: true), "<tn>\$1</tn>"),
-    (RegExp(r"\[spoiler\](.*?)\[/spoiler\]", dotAll: true), "<spoiler>\$1</spoiler>"),
-    (RegExp(r"\[nodtext\](.*?)\[/nodtext\]", dotAll: true), "<nodtext>\$1</nodtext>"),
-    (RegExp(r"\[code\](.*?)\[/code\]", dotAll: true), "<code>\$1</code>"),
-    (RegExp(r"\[br\]", multiLine: true), "<br>"),
-    (RegExp(r"\[hr\]", multiLine: true), "<hr>"),
-    (RegExp(r"\[quote\](.*?)\[/quote\]", dotAll: true), "<quote>\$1</quote>"),
-    (RegExp(r"^h4\.\s*(.*?)$", multiLine: true), "<h4>\$1</h4>"),
-    (RegExp(r"^h5\.\s*(.*?)$", multiLine: true), "<h5>\$1</h5>"),
-    (RegExp(r"^h6\.\s*(.*?)$", multiLine: true), "<h6>\$1</h6>"),
-    (RegExp(r"\[expand\](.*?)\[/expand\]", dotAll: true), "<expand>\$1</expand>"),
-    (RegExp(r"\[table\]", multiLine: true), "<table>"),
-    (RegExp(r"\[/table\]", multiLine: true), "</table>"),
-    (RegExp(r"\[thead\]", multiLine: true), "<thead>"),
-    (RegExp(r"\[/thead\]", multiLine: true), "</thead>"),
-    (RegExp(r"\[tbody\]", multiLine: true), "<tbody>"),
-    (RegExp(r"\[/tbody\]", multiLine: true), "</tbody>"),
-    (RegExp(r"\[tr\]", multiLine: true), "<tr>"),
-    (RegExp(r"\[/tr\]", multiLine: true), "</tr>"),
-    (RegExp(r"\[th\]", multiLine: true), "<th>"),
-    (RegExp(r"\[/th\]", multiLine: true), "</th>"),
-    (RegExp(r"\[td\]", multiLine: true), "<td>"),
-    (RegExp(r"\[/td\]", multiLine: true), "</td>"),
-    (RegExp(r"\[colgroup\]", multiLine: true), "<colgroup>"),
-    (RegExp(r"\[/colgroup\]", multiLine: true), "</colgroup>"),
-    (RegExp(r"\[col\]", multiLine: true), "<col>"),
-];
-
-// Link pattern
-final RegExp _linkPattern = RegExp(r'"(.*?)":\[(.*?)\]');
-
-/// Expands $n, $& and $$ in [template] using the contents of [match].
-String expandMatch(String template, Match match) {
-    return template.replaceAllMapped(
-        RegExp(r'\$(\d+|&|\$)'),
-        (m) {
-            final token = m.group(1);
-
-            switch (token) {
-                case null:  return m.group(0)!;
-                case '&':   return match.group(0)!;
-                case '\$':  return '\$';
-                default:
-                    // It's a capture group index.
-                    final int? index = int.tryParse(token);
-
-                    if (index != null && index <= match.groupCount) {
-                        return match.group(index) ?? '';
-                    }
-
-                    return m.group(0)!;
-            }
-        },
-    );
-}
-
 String convertDTextToHTML(String input) {
     return DTextParser.parse(input);
 
@@ -163,7 +94,8 @@ class DanbooruFinder implements ISubfinder {
             altImages: (sampleData != null) ? [sampleData["url"]] : null,
             authors: artists, 
             source: "danbooru", 
-            preview: postData["preview_file_url"], 
+            preview: postData["preview_file_url"],
+            sample: postData["large_file_url"] ?? postData["preview_file_url"],
             md5: [postData["md5"]], 
             rating: postData["rating"], 
             parentID: postData["parent_id"], 
@@ -177,7 +109,9 @@ class DanbooruFinder implements ISubfinder {
             poster: postData["author"] ?? "User ${postData['uploader_id']}",
             posterID: postData["uploader_id"], 
             title: null
-        );
+        )/*..setHeaders({
+            "User-Agent": userAgent
+        });*/;
     }
 
     static Comment toComment(Map<String, dynamic> commentData) {
@@ -241,7 +175,7 @@ class DanbooruFinder implements ISubfinder {
 
         completer.complete(searchFuture);
 
-        return completer.operation.value;
+        return (await completer.operation.valueOrCancellation()) ?? <Post>[];
     }
 
     @override
@@ -264,7 +198,7 @@ class DanbooruFinder implements ISubfinder {
 
         completer.complete(searchFuture);
 
-        return completer.operation.value;
+        return (await completer.operation.valueOrCancellation()) ?? <Post>[];
     }
 
     @override
@@ -404,15 +338,21 @@ class DanbooruFinder implements ISubfinder {
         final List<String> splitTags = tags.trim().split(" ");
         final List<String> splitOptionalTags = (optionalTags.isNotEmpty) ? optionalTags.trim().split(" ") : [];
         final Iterable<String> splitBlacklist = (blacklist.isNotEmpty) ? blacklist.trim().split(" ") : [];
-        final List<String> queries = [];
-
-        for (final optionalTag in splitOptionalTags) {
-            queries.add(
-                [...splitTags, optionalTag]  // We merge the tags, one optional tag, and the blacklisted tags.
-                .where((element) => element.isNotEmpty)         // We remove any empty strings.
-                .join(" ")                                      // We join them into a singular empty string.
-            );
-        }
+        final List<String> queries = (splitOptionalTags.isEmpty) ? [[
+                ...splitTags,
+                ...splitBlacklist,
+            ].where(
+                (element) => element.isNotEmpty
+            ).join(" "),
+        ] : splitOptionalTags.map((optTag) {
+            return [
+                ...splitTags,
+                optTag,
+                ...splitBlacklist,
+            ].where(
+                (element) => element.isNotEmpty
+            ).join(" ");
+        }).toList();
 
         Nokulog.i("queries: ${queries.join("\n")}");
 
@@ -500,7 +440,19 @@ class DanbooruFinder implements ISubfinder {
         if (limit <= defaultSize) {
             final rawPosts = await _client.searchPosts(tags, limit: checkSize, page: currentPage);
             if (completer.isCanceled) return [];
-            return _filterInvalidPosts(rawPosts).map(toPost).toList();
+            final results = _filterInvalidPosts(rawPosts).map(toPost).toList();
+
+            Nokulog.i("${rawPosts.length} | ${results.length}");
+
+            if (results.isEmpty || results.length == rawPosts.length) {
+                return results;
+            }
+
+            while (results.length < limit) {
+                results.add(results.last);
+            }
+
+            return results;
         }
 
         while (currentSize == checkSize) {

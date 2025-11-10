@@ -39,7 +39,8 @@ class KonachanFinder implements ISubfinder {
             altImages: (jpegURL != null) ? [jpegURL] : null,
             authors: [], //(postData["tag_string_artist"] as String).split(" "), 
             source: "konachan", 
-            preview: postData["preview_url"], 
+            preview: postData["preview_url"],
+            sample: postData["sample_url"],
             md5: [postData["md5"]], 
             rating: postData["rating"], 
             parentID: postData["parent_id"], 
@@ -103,7 +104,7 @@ class KonachanFinder implements ISubfinder {
 
         completer.complete(searchFuture);
 
-        return completer.operation.value;
+        return (await completer.operation.valueOrCancellation()) ?? <Post>[];
     }
 
     @override

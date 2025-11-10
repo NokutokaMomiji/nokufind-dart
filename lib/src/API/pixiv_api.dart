@@ -1,8 +1,11 @@
+// ignore_for_file: constant_identifier_names
+
 import 'dart:convert';
 
 import 'package:crypto/crypto.dart';
 import 'package:dio/dio.dart';
 import 'package:dio_http2_adapter/dio_http2_adapter.dart';
+import 'package:nokufind/src/API/api_tools.dart';
 import 'package:nokufind/src/Utils/pixiv_utils.dart';
 import 'package:nokufind/src/Utils/utils.dart';
 
@@ -21,7 +24,7 @@ enum Sort { date_desc, date_asc, popular_desc, empty }
 enum SearchDuration { within_last_day, within_last_week, within_last_month, empty, none }
 enum Bool { trueValue, falseValue }
 
-class BasePixivAPI {
+class BasePixivAPI extends BaseAPI {
     static String clientID = "MOBrBDS8blbauoSck0ZfDbtuzpyT";
     static String clientSecret = "lsACyCD94FhDUtGTXi3QzcFE2uU1hqtDaKeqrdwj";
     static String hashSecret = "28c1fdd170a5204386cb1313c7077b34f83e4aaf4aa829ce78c231e05b0bae2c";
@@ -33,12 +36,13 @@ class BasePixivAPI {
     Map<String, dynamic> requestsKwargs = {};
     
     String hosts = "https://app-api.pixiv.net";
-    final Dio _client = Dio()..httpClientAdapter = Http2Adapter(ConnectionManager(idleTimeout: const Duration(seconds: 15)));
 
-    BasePixivAPI({Map<String, dynamic>? requestsKwargs}) {
+    BasePixivAPI({Map<String, dynamic>? requestsKwargs}) : super(
+        Dio()..httpClientAdapter = Http2Adapter(ConnectionManager(idleTimeout: const Duration(seconds: 15)))
+    ) {
         additionalHeaders = CaseInsensitiveMap<String>(requestsKwargs?['headers']?.cast<String, String>());
         this.requestsKwargs = requestsKwargs ?? {};
-        addSmartRetry(_client);
+        addSmartRetry(client);
     }
 
     void setAdditionalHeaders(Map<String, String> headers) {
@@ -65,21 +69,21 @@ class BasePixivAPI {
         try {
             switch (method) {
                 case "GET":
-                return await _client.get(
+                return await client.get(
                     url, 
                     queryParameters: params,
                     options: Options(headers: mergedHeaders, validateStatus: (status) => (status != null && status < 403),)
                 );
 
                 case "POST":
-                return await _client.post(
+                return await client.post(
                     url,
                     data: (data != null) ? FormData.fromMap(data) : data,
                     options: Options(headers: mergedHeaders, validateStatus: (status) => (status != null && status < 403),)
                 );
 
                 case "DELETE":
-                return await _client.delete(
+                return await client.delete(
                     url,
                     data: (data != null) ? FormData.fromMap(data) : data,
                     options: Options(headers: mergedHeaders)
@@ -413,7 +417,7 @@ class AppPixivAPI extends BasePixivAPI{
     }
 
     Future<Map<String, dynamic>> illustRanking({
-        Mode mode = Mode.day,
+        Mode mode = Mode.day_r18,
         Filter filter = Filter.for_ios,
         DateTime? date,
         int? offset,
